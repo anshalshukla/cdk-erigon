@@ -21,7 +21,7 @@ import (
 	"github.com/ledgerwatch/erigon/turbo/rpchelper"
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	types "github.com/ledgerwatch/erigon/zk/rpcdaemon"
-	"github.com/ledgerwatch/erigon/zk/witness"
+	zkstages "github.com/ledgerwatch/erigon/zk/stages"
 	"github.com/ledgerwatch/erigon/zkevm/jsonrpc/client"
 )
 
@@ -345,7 +345,7 @@ func (api *ZkEvmAPIImpl) getBlockRangeWitness(ctx context.Context, db kv.RoDB, s
 		return nil, err
 	}
 
-	generator := witness.NewGenerator(
+	generator := zkstages.NewWitnessGenerator(
 		api.ethApi.dirs,
 		api.ethApi.historyV3(tx),
 		api.ethApi._agg,
@@ -364,22 +364,8 @@ func (api *ZkEvmAPIImpl) GetBatchWitness(ctx context.Context, batchNumber uint64
 		return nil, err
 	}
 
-	blocks, err := getAllBlocksInBatchNumber(tx, batchNumber)
-
-	if err != nil {
-		tx.Rollback()
-		return nil, err
-	}
-
-	tx.Rollback()
-
-	if len(blocks) == 0 {
-		return nil, errors.New("batch not found")
-	}
-
-	endBlock := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blocks[0]))
-	startBlock := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(blocks[len(blocks)-1]))
-	return api.getBlockRangeWitness(ctx, api.db, startBlock, endBlock, false)
+	hermezDb := hermez_db.NewHermezDbReader(tx)
+	return hermezDb.GetWitnessByBatchNo(batchNumber)
 }
 
 func getLastBlockInBatchNumber(tx kv.Tx, batchNumber uint64) (uint64, error) {

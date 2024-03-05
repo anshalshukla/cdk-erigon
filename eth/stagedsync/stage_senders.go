@@ -100,6 +100,11 @@ func SpawnRecoverSendersStage(cfg SendersCfg, s *StageState, u Unwinder, tx kv.R
 	if to < s.BlockNumber {
 		return nil
 	}
+	// Move 100 block at a time, required for witness generation stage
+	if to-s.BlockNumber > 100 {
+		to = s.BlockNumber + 100
+	}
+
 	logPrefix := s.LogPrefix()
 	if !quiet && to > s.BlockNumber+16 {
 		log.Info(fmt.Sprintf("[%s] Started", logPrefix), "from", s.BlockNumber, "to", to)

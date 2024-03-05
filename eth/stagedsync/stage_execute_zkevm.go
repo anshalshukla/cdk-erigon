@@ -132,6 +132,12 @@ func SpawnExecuteBlocksStageZk(s *StageState, u Unwinder, tx kv.RwTx, toBlock ui
 		return err
 	}
 	prevBlockHash := header.Root
+
+	// Move 100 block at a time, required for witness generation stage
+	if to-s.BlockNumber > 100 {
+		to = s.BlockNumber + 100
+	}
+
 Loop:
 	for blockNum := stageProgress + 1; blockNum <= to; blockNum++ {
 		stageProgress = blockNum

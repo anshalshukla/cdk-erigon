@@ -1,10 +1,11 @@
-package witness
+package stages
 
 import (
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
+
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/datadir"
 	"github.com/ledgerwatch/erigon-lib/kv"
@@ -26,10 +27,220 @@ import (
 	"github.com/ledgerwatch/erigon/turbo/trie"
 	dstypes "github.com/ledgerwatch/erigon/zk/datastream/types"
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
-	zkStages "github.com/ledgerwatch/erigon/zk/stages"
+	"github.com/ledgerwatch/erigon/zk/sequencer"
 	zkUtils "github.com/ledgerwatch/erigon/zk/utils"
 	"github.com/ledgerwatch/log/v3"
 )
+
+type WitnessCfg struct {
+	db          kv.RwDB
+	tmpDir      datadir.Dirs
+	blockReader services.FullBlockReader
+	engine      consensus.Engine
+	chainConfig *chain.Config
+	agg         *libstate.AggregatorV3
+	historyV3   bool
+}
+
+func GenerateWitnessCfg(db kv.RwDB, tmpDir datadir.Dirs, blockReader services.FullBlockReader, engine consensus.Engine, chainConfig *chain.Config, agg *libstate.AggregatorV3, historyV3 bool) WitnessCfg {
+	return WitnessCfg{
+		db:          db,
+		tmpDir:      tmpDir,
+		blockReader: blockReader,
+		engine:      engine,
+		chainConfig: chainConfig,
+		agg:         agg,
+		historyV3:   historyV3,
+	}
+}
+
+func SpawnWitnessStage(
+	s *stagedsync.StageState,
+	u stagedsync.Unwinder,
+	tx kv.RwTx,
+	ctx context.Context,
+	cfg WitnessCfg,
+	initialCycle bool,
+	quiet bool,
+) error {
+	logPrefix := s.LogPrefix()
+	log.Info(fmt.Sprintf("[%s] Starting witness stage", logPrefix))
+	defer log.Info(fmt.Sprintf("[%s] Finished witness stage", logPrefix))
+
+	if sequencer.IsSequencer() {
+		log.Info(fmt.Sprintf("[%s] skipping -- sequencer", logPrefix))
+		return nil
+	}
+
+	if tx == nil {
+		log.Debug(fmt.Sprintf("[%s] witness: no tx provided, creating a new one", logPrefix))
+		var err error
+		tx, err = cfg.db.BeginRw(ctx)
+		if err != nil {
+			return fmt.Errorf("Failed to open tx, %w", err)
+		}
+		defer tx.Rollback()
+	}
+
+	// batch until which witness has been generated and saved to db
+	witnessProgress, err := stages.GetStageProgress(tx, stages.Witness)
+	if err != nil {
+		return fmt.Errorf("save stage progress error: %v", err)
+	}
+
+	// batch which has been processed by stage_batches
+	latestBlock, err := stages.GetStageProgress(tx, stages.Execution)
+	if err != nil {
+		return fmt.Errorf("could not retrieve batch no progress")
+	}
+
+	hermezDbReader := hermez_db.NewHermezDbReader(tx)
+
+	batchesProgress, err := hermezDbReader.GetBatchNoByL2Block(latestBlock)
+	if err != nil {
+		return fmt.Errorf("could not retrieve batch for latest block")
+	}
+
+	if witnessProgress >= batchesProgress {
+		log.Info("All batch witness already in db, skipping")
+		return nil
+	}
+
+	// witness generation should start from stored witness of batch in db + 1
+	witnessFromBatch := witnessProgress + 1
+	// witness generation should happen till batch of latest block -1
+	// as there might be more blocks incoming for this batch
+	witnessToBatch := batchesProgress - 1
+
+	wg := NewWitnessGenerator(cfg.tmpDir, cfg.historyV3, cfg.agg, cfg.blockReader, cfg.chainConfig, cfg.engine)
+
+	for b := witnessFromBatch; b <= witnessToBatch; b++ {
+		highestBlockInBatch, err := hermezDbReader.GetHighestBlockInBatch(b)
+		if err != nil {
+			return err
+		}
+
+		if highestBlockInBatch == 0 {
+			continue
+		}
+
+		nextStageProgress, err := stages.GetStageProgress(tx, stages.HashState)
+		if err != nil {
+			return err
+		}
+		if nextStageProgress < highestBlockInBatch {
+			// Skip this stage
+			return nil
+		}
+
+		log.Info(fmt.Sprintf("[%s] Starting witness generation", logPrefix), "currentBatch", b, "highestBatch", witnessToBatch)
+		w, err := wg.GenerateWitnessByBatch(tx, ctx, b, false)
+		if err != nil {
+			return err
+		}
+
+		hermezDb := hermez_db.NewHermezDb(tx)
+		err = hermezDb.WriteWitnessByBatchNo(b, w)
+		if err != nil {
+			return err
+		}
+
+		err = stages.SaveStageProgress(tx, stages.Witness, b)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func UnwindWitnessStage(
+	u *stagedsync.UnwindState,
+	s *stagedsync.StageState,
+	tx kv.RwTx,
+	ctx context.Context,
+	cfg WitnessCfg,
+	initialCycle bool,
+) (err error) {
+	logPrefix := u.LogPrefix()
+
+	useExternalTx := tx != nil
+	if !useExternalTx {
+		tx, err = cfg.db.BeginRw(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+	}
+
+	fromBlock := u.UnwindPoint
+	toBlock := u.CurrentBlockNumber
+	log.Info(fmt.Sprintf("[%s] Unwinding witness stage from block number", logPrefix), "fromBlock", fromBlock, "toBlock", toBlock)
+	defer log.Info(fmt.Sprintf("[%s] Unwinding witness complete", logPrefix))
+
+	hermezDb := hermez_db.NewHermezDb(tx)
+	fromBatch, err := hermezDb.GetBatchNoByL2Block(fromBlock)
+	if err != nil {
+		return fmt.Errorf("get batch no by l2 block error: %v", err)
+	}
+	toBatch, err := hermezDb.GetBatchNoByL2Block(toBlock)
+	if err != nil {
+		return fmt.Errorf("get batch no by l2 block error: %v", err)
+	}
+
+	hermezDb.DeleteWitnessByBatchRange(fromBatch, toBatch)
+
+	if !useExternalTx {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func PruneWitnessStage(
+	s *stagedsync.PruneState,
+	tx kv.RwTx,
+	cfg WitnessCfg,
+	ctx context.Context,
+	initialCycle bool,
+) (err error) {
+	logPrefix := s.LogPrefix()
+	useExternalTx := tx != nil
+	if !useExternalTx {
+		tx, err = cfg.db.BeginRw(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback()
+	}
+
+	log.Info(fmt.Sprintf("[%s] Pruning witness...", logPrefix))
+	defer log.Info(fmt.Sprintf("[%s] Unwinding witness complete", logPrefix))
+
+	hermezDb := hermez_db.NewHermezDb(tx)
+
+	toBatch, err := stages.GetStageProgress(tx, stages.Witness)
+	if err != nil {
+		return fmt.Errorf("get stage witness progress error: %v", err)
+	}
+
+	hermezDb.DeleteWitnessByBatchRange(0, toBatch)
+
+	log.Info(fmt.Sprintf("[%s] Deleted witness.", logPrefix))
+	log.Info(fmt.Sprintf("[%s] Saving stage progress", logPrefix), "stageProgress", 0)
+	if err := stages.SaveStageProgress(tx, stages.Batches, 0); err != nil {
+		return fmt.Errorf("save stage progress error: %v", err)
+	}
+
+	if !useExternalTx {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 var (
 	maxGetProofRewindBlockCount uint64 = 1_000
@@ -37,8 +248,7 @@ var (
 	ErrEndBeforeStart = errors.New("end block must be higher than start block")
 )
 
-type Generator struct {
-	tx          kv.Tx
+type WitnessGenerator struct {
 	dirs        datadir.Dirs
 	historyV3   bool
 	agg         *libstate.AggregatorV3
@@ -47,15 +257,15 @@ type Generator struct {
 	engine      consensus.EngineReader
 }
 
-func NewGenerator(
+func NewWitnessGenerator(
 	dirs datadir.Dirs,
 	historyV3 bool,
 	agg *libstate.AggregatorV3,
 	blockReader services.FullBlockReader,
 	chainCfg *chain.Config,
 	engine consensus.EngineReader,
-) *Generator {
-	return &Generator{
+) *WitnessGenerator {
+	return &WitnessGenerator{
 		dirs:        dirs,
 		historyV3:   historyV3,
 		agg:         agg,
@@ -65,7 +275,38 @@ func NewGenerator(
 	}
 }
 
-func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug bool) ([]byte, error) {
+func (g *WitnessGenerator) GenerateWitnessByBatch(tx kv.Tx, ctx context.Context, batch uint64, debug bool) ([]byte, error) {
+	hermezDb := hermez_db.NewHermezDbReader(tx)
+
+	// first batch should have start block as 0
+	startBlock := uint64(1)
+
+	if batch > 1 {
+		var err error
+		for i := uint64(1); ; i++ {
+			startBlock, err = hermezDb.GetHighestBlockInBatch(batch - i)
+			if startBlock != 0 {
+				break
+			}
+		}
+
+		if err != nil {
+			return nil, err
+		}
+
+		// start block of batch will be (highestBlock + 1) of last batch
+		startBlock += 1
+	}
+
+	endBlock, err := hermezDb.GetHighestBlockInBatch(batch)
+	if err != nil {
+		return nil, err
+	}
+
+	return g.GenerateWitness(tx, ctx, startBlock, endBlock, debug)
+}
+
+func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug bool) ([]byte, error) {
 	if startBlock > endBlock {
 		return nil, ErrEndBeforeStart
 	}
@@ -112,9 +353,9 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 			return nil, err
 		}
 
-		interHashStageCfg := zkStages.StageZkInterHashesCfg(nil, true, true, false, g.dirs.Tmp, g.blockReader, nil, g.historyV3, g.agg, nil)
+		interHashStageCfg := StageZkInterHashesCfg(nil, true, true, false, g.dirs.Tmp, g.blockReader, nil, g.historyV3, g.agg, nil)
 
-		err = zkStages.UnwindZkIntermediateHashesStage(unwindState, stageState, batch, interHashStageCfg, ctx)
+		err = UnwindZkIntermediateHashesStage(unwindState, stageState, batch, interHashStageCfg, ctx)
 		if err != nil {
 			return nil, err
 		}

@@ -61,6 +61,11 @@ func SpawnBlockHashStage(s *StageState, tx kv.RwTx, cfg BlockHashesCfg, ctx cont
 		return nil
 	}
 
+	// Move 100 block at a time, required for witness generation stage
+	if headNumber-s.BlockNumber > 100 {
+		headNumber = s.BlockNumber + 100
+	}
+
 	startKey := make([]byte, 8)
 	binary.BigEndian.PutUint64(startKey, s.BlockNumber)
 	endKey := dbutils.HeaderKey(headNumber+1, libcommon.Hash{}) // etl.Tranform uses ExractEndKey as exclusive bound, therefore +1
