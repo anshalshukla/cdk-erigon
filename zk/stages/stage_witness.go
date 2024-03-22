@@ -159,7 +159,8 @@ func SpawnWitnessStage(
 		}
 
 		// Skip witness generation for this batch as it is bound to fail
-		if highestBlockInBatch-lowestBlockInBatch > maxGetProofRewindBlockCount {
+		if latestBlock-lowestBlockInBatch > maxGetProofRewindBlockCount {
+			log.Info(fmt.Sprintf("[%s] Skipping, lowest block too far cannot rewind", logPrefix), "lowestBlockInBatch", lowestBlockInBatch, "latestBlock", latestBlock)
 			continue
 		}
 
