@@ -127,9 +127,15 @@ func SpawnWitnessStage(
 	}
 
 	blockNblocksBehind := highestBlockInLatestBatch - cfg.storeNblocks + 1
-	witnessFromBatch, err := hermezDbReader.GetBatchNoByL2Block(blockNblocksBehind)
+
+	batchNblocksBehind, err := hermezDbReader.GetBatchNoByL2Block(blockNblocksBehind)
 	if err != nil {
 		return err
+	}
+
+	witnessFromBatch := witnessProgress + 1
+	if witnessProgress < batchNblocksBehind {
+		witnessFromBatch = batchNblocksBehind
 	}
 
 	wg := NewWitnessGenerator(cfg.tmpDir, cfg.historyV3, cfg.agg, cfg.blockReader, cfg.chainConfig, cfg.engine)
@@ -198,7 +204,7 @@ func SpawnWitnessStage(
 
 	// Delete additional batches
 	hermezDb := hermez_db.NewHermezDb(tx)
-	err = hermezDb.DeleteWitnessTillBatchNo(witnessFromBatch - 1)
+	err = hermezDb.DeleteWitnessTillBatchNo(batchNblocksBehind - 1)
 	if err != nil {
 		return err
 	}
