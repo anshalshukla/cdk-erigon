@@ -1,6 +1,6 @@
 {
-  "ChainName": "devnet",
-  "chainId": 2440,
+  "ChainName": "hermez-estest",
+  "chainId": 123,
   "consensus": "ethash",
   "homesteadBlock": 0,
   "daoForkBlock": 0,
@@ -22,4 +22,3 @@
   "pragueTime": 9999999999999999999999999999999999999999999999999,
   "ethash": {}
 }
-

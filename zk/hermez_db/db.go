@@ -30,7 +30,7 @@ const L1_BLOCK_HASHES = "l1_block_hashes"                              // l1 blo
 const BLOCK_L1_BLOCK_HASHES = "block_l1_block_hashes"                  // block number -> l1 block hash
 const L1_BLOCK_HASH_GER = "l1_block_hash_ger"                          // l1 block hash -> GER
 const INTERMEDIATE_TX_STATEROOTS = "hermez_intermediate_tx_stateRoots" // l2blockno -> stateRoot
-const BATCH_WITNESS = "batch_witness"                                  // batch witness -> witness
+const BATCH_WITNESSES = "hermez_batch_witness"                         // batch witness -> witness
 
 const chunkSize = 100000 // 100KB
 
@@ -76,7 +76,7 @@ func CreateHermezBuckets(tx kv.RwTx) error {
 		BLOCK_L1_BLOCK_HASHES,
 		L1_BLOCK_HASH_GER,
 		INTERMEDIATE_TX_STATEROOTS,
-		BATCH_WITNESS,
+		BATCH_WITNESSES,
 	}
 	for _, t := range tables {
 		if err := tx.CreateBucket(t); err != nil {
@@ -322,25 +322,34 @@ func (db *HermezDbReader) getLatest(table string) (*types.L1BatchInfo, error) {
 	}
 	defer c.Close()
 
-	k, v, err := c.Last()
-	if err != nil {
-		return nil, err
+	var l1BlockNo, batchNo uint64
+	var value []byte
+	for k, v, err := c.First(); k != nil; k, v, err = c.Next() {
+		if err != nil {
+			return nil, err
+		}
+
+		tmpL1BlockNo, tmpBatchNo, err := SplitKey(k)
+		if err != nil {
+			return nil, err
+		}
+
+		if tmpBatchNo > batchNo {
+			l1BlockNo = tmpL1BlockNo
+			batchNo = tmpBatchNo
+			value = v
+		}
 	}
 
-	l1BlockNo, batchNo, err := SplitKey(k)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(v) != 96 && len(v) != 64 {
+	if len(value) != 96 && len(value) != 64 {
 		return nil, fmt.Errorf("invalid hash length")
 	}
 
-	l1TxHash := common.BytesToHash(v[:32])
-	stateRoot := common.BytesToHash(v[32:64])
+	l1TxHash := common.BytesToHash(value[:32])
+	stateRoot := common.BytesToHash(value[32:64])
 	var l1InfoRoot common.Hash
-	if len(v) > 64 {
-		l1InfoRoot = common.BytesToHash(v[64:])
+	if len(value) > 64 {
+		l1InfoRoot = common.BytesToHash(value[64:])
 	}
 
 	return &types.L1BatchInfo{
@@ -517,14 +526,14 @@ func (db *HermezDb) WriteBatchGlobalExitRoot(batchNumber uint64, ger dstypes.Ger
 	return db.tx.Put(GLOBAL_EXIT_ROOTS_BATCHES, Uint64ToBytes(batchNumber), ger.EncodeToBytes())
 }
 
-func (db *HermezDbReader) GetBatchGlobalExitRoots(fromBatchNum, toBatchNum uint64) ([]*dstypes.GerUpdate, error) {
+func (db *HermezDbReader) GetBatchGlobalExitRoots(fromBatchNum, toBatchNum uint64) (*[]dstypes.GerUpdate, error) {
 	c, err := db.tx.Cursor(GLOBAL_EXIT_ROOTS_BATCHES)
 	if err != nil {
 		return nil, err
 	}
 	defer c.Close()
 
-	var gers []*dstypes.GerUpdate
+	var gers []dstypes.GerUpdate
 	var k, v []byte
 
 	for k, v, err = c.First(); k != nil; k, v, err = c.Next() {
@@ -537,11 +546,11 @@ func (db *HermezDbReader) GetBatchGlobalExitRoots(fromBatchNum, toBatchNum uint6
 			if err != nil {
 				return nil, err
 			}
-			gers = append(gers, gerUpdate)
+			gers = append(gers, *gerUpdate)
 		}
 	}
 
-	return gers, err
+	return &gers, err
 }
 
 func (db *HermezDbReader) GetBatchGlobalExitRoot(batchNum uint64) (*dstypes.GerUpdate, error) {
@@ -584,6 +593,10 @@ func (db *HermezDb) DeleteBlockGlobalExitRoots(fromBlockNum, toBlockNum uint64) 
 
 func (db *HermezDb) DeleteBlockL1BlockHashes(fromBlockNum, toBlockNum uint64) error {
 	return db.deleteFromBucketWithUintKeysRange(BLOCK_L1_BLOCK_HASHES, fromBlockNum, toBlockNum)
+}
+
+func (db *HermezDb) DeleteBlockL1InfoTreeIndexes(fromBlockNum, toBlockNum uint64) error {
+	return db.deleteFromBucketWithUintKeysRange(BLOCK_L1_INFO_TREE_INDEX, fromBlockNum, toBlockNum)
 }
 
 // from and to are inclusive
@@ -876,7 +889,7 @@ func (db *HermezDbReader) GetBlockInfoRoot(blockNumber uint64) (common.Hash, err
 }
 
 func (db *HermezDbReader) GetWitnessByBatchNo(batchNo uint64) ([]byte, error) {
-	w, err := ReadChunks(db.tx, BATCH_WITNESS, Uint64ToBytes(batchNo))
+	w, err := ReadChunks(db.tx, BATCH_WITNESSES, Uint64ToBytes(batchNo))
 	if err != nil {
 		return nil, err
 	}
@@ -885,7 +898,7 @@ func (db *HermezDbReader) GetWitnessByBatchNo(batchNo uint64) ([]byte, error) {
 }
 
 func (db *HermezDbReader) GetLatestStoredWitnessBatchNo() (uint64, error) {
-	cursor, err := db.tx.Cursor(BATCH_WITNESS)
+	cursor, err := db.tx.Cursor(BATCH_WITNESSES)
 	if err != nil {
 		return 0, err
 	}
@@ -899,7 +912,7 @@ func (db *HermezDbReader) GetLatestStoredWitnessBatchNo() (uint64, error) {
 }
 
 func (db *HermezDbReader) GetOldestStoredWitnessBatch() (uint64, error) {
-	cursor, err := db.tx.Cursor(BATCH_WITNESS)
+	cursor, err := db.tx.Cursor(BATCH_WITNESSES)
 	if err != nil {
 		return 0, err
 	}
@@ -913,7 +926,7 @@ func (db *HermezDbReader) GetOldestStoredWitnessBatch() (uint64, error) {
 }
 
 func (db *HermezDb) WriteWitnessByBatchNo(batchNo uint64, w []byte) error {
-	return WriteChunks(db.tx, BATCH_WITNESS, Uint64ToBytes(batchNo), w)
+	return WriteChunks(db.tx, BATCH_WITNESSES, Uint64ToBytes(batchNo), w)
 }
 
 func (db *HermezDb) DeleteWitnessByBatchNo(batchNo uint64) error {
@@ -926,11 +939,11 @@ func (db *HermezDb) DeleteWitnessByBatchNo(batchNo uint64) error {
 		return nil
 	}
 
-	return DeleteChunks(db.tx, BATCH_WITNESS, Uint64ToBytes(batchNo))
+	return DeleteChunks(db.tx, BATCH_WITNESSES, Uint64ToBytes(batchNo))
 }
 
 func (db *HermezDb) DeleteWitnessByBatchRange(fromBatch uint64, toBatch uint64) error {
-	cursor, err := db.tx.Cursor(BATCH_WITNESS)
+	cursor, err := db.tx.Cursor(BATCH_WITNESSES)
 	if err != nil {
 		return err
 	}
@@ -960,7 +973,7 @@ func (db *HermezDb) DeleteWitnessByBatchRange(fromBatch uint64, toBatch uint64) 
 }
 
 func (db *HermezDb) DeleteWitnessTillBatchNo(toBatch uint64) error {
-	cursor, err := db.tx.Cursor(BATCH_WITNESS)
+	cursor, err := db.tx.Cursor(BATCH_WITNESSES)
 	if err != nil {
 		return err
 	}

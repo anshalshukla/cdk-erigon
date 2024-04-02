@@ -21,15 +21,16 @@ import (
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	txtype "github.com/ledgerwatch/erigon/zk/tx"
 
+	"github.com/ledgerwatch/erigon/chain"
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/log/v3"
-	"github.com/ledgerwatch/erigon/chain"
 )
 
 const (
 	preForkId7BlockGasLimit = 30_000_000
 	forkId7BlockGasLimit    = 18446744073709551615 // 0xffffffffffffffff
 	forkId8BlockGasLimit    = 1125899906842624     // 0x4000000000000
+	HIGHEST_KNOWN_FORK      = 9
 )
 
 type ErigonDb interface {
@@ -64,6 +65,7 @@ type HermezDb interface {
 	DeleteL1BlockHashGers(l1BlockHashes *[]common.Hash) error
 	WriteBatchGlobalExitRoot(batchNumber uint64, ger types.GerUpdate) error
 	WriteIntermediateTxStateRoot(l2BlockNumber uint64, txHash common.Hash, rpcRoot common.Hash) error
+	WriteBlockL1InfoTreeIndex(blockNumber uint64, l1Index uint64) error
 }
 
 type DatastreamClient interface {
@@ -157,6 +159,7 @@ func SpawnStageBatches(
 
 	highestSeenBatchNo := uint64(0)
 	highestHashableL2BlockNo := uint64(0)
+	highestL1InfoTreeIndex := uint32(0)
 
 	lastForkId64, err := stages.GetStageProgress(tx, stages.ForkId)
 	lastForkId := uint16(lastForkId64)
@@ -186,6 +189,11 @@ func SpawnStageBatches(
 			// skip if we already have this block
 			if l2Block.L2BlockNumber < lastBlockHeight+1 {
 				continue
+			}
+
+			if l2Block.ForkId > HIGHEST_KNOWN_FORK {
+				message := fmt.Sprintf("unsupported fork id %v received from the data stream", l2Block.ForkId)
+				panic(message)
 			}
 
 			// update forkid
@@ -219,6 +227,11 @@ func SpawnStageBatches(
 			// store our finalized state if this batch matches the highest verified batch number on the L1
 			if l2Block.BatchNumber == highestVerifiedBatch {
 				rawdb.WriteForkchoiceFinalized(tx, l2Block.L2Blockhash)
+			}
+
+			// make sure to capture the l1 info tree index changes so we can store progress
+			if l2Block.L1InfoTreeIndex > highestL1InfoTreeIndex {
+				highestL1InfoTreeIndex = l2Block.L1InfoTreeIndex
 			}
 
 			if lastHash != emptyHash {
@@ -305,6 +318,10 @@ func SpawnStageBatches(
 	// store the highest seen forkid
 	if err := stages.SaveStageProgress(tx, stages.ForkId, uint64(lastForkId)); err != nil {
 		return fmt.Errorf("save stage progress error: %v", err)
+	}
+
+	if err := stages.SaveStageProgress(tx, stages.HighestUsedL1InfoIndex, uint64(highestL1InfoTreeIndex)); err != nil {
+		return err
 	}
 
 	// stop printing blocks written progress routine
@@ -457,6 +474,10 @@ func UnwindBatchesStage(u *stagedsync.UnwindState, tx kv.RwTx, cfg BatchesCfg, c
 	if err := hermezDb.DeleteBlockL1BlockHashes(fromBlock, toBlock); err != nil {
 		return fmt.Errorf("delete block l1 block hashes error: %v", err)
 	}
+
+	if err := hermezDb.DeleteBlockL1InfoTreeIndexes(fromBlock, toBlock); err != nil {
+		return fmt.Errorf("delete block l1 block hashes error: %v", err)
+	}
 	///////////////////////////////////////////////////////
 
 	log.Info(fmt.Sprintf("[%s] Deleted headers, bodies, forkIds and blockBatches.", logPrefix))
@@ -567,15 +588,17 @@ func PruneBatchesStage(s *stagedsync.PruneState, tx kv.RwTx, cfg BatchesCfg, ctx
 }
 
 func getGasLimit(forkId uint16) uint64 {
-	switch forkId {
-	case 8:
+	if forkId >= 8 {
 		return forkId8BlockGasLimit
-	case 7:
-		return forkId8BlockGasLimit
-		// return ForkId7BlockGasLimit
-	default:
-		return preForkId7BlockGasLimit
 	}
+
+	// [hack] the rpc returns forkid8 value, but forkid7 is used in execution
+	if forkId == 7 {
+		return forkId8BlockGasLimit
+		// return forkId7BlockGasLimit
+	}
+
+	return preForkId7BlockGasLimit
 }
 
 // writeL2Block writes L2Block to ErigonDb and HermezDb
@@ -649,6 +672,12 @@ func writeL2Block(eriDb ErigonDb, hermezDb HermezDb, l2Block *types.FullL2Block)
 					return fmt.Errorf("write ger for l1 block hash error: %v", err)
 				}
 			}
+		}
+	}
+
+	if l2Block.L1InfoTreeIndex != 0 {
+		if err = hermezDb.WriteBlockL1InfoTreeIndex(l2Block.L2BlockNumber, uint64(l2Block.L1InfoTreeIndex)); err != nil {
+			return err
 		}
 	}
 

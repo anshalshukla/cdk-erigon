@@ -5,12 +5,13 @@ import (
 
 	"strings"
 
+	"time"
+
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon/cmd/utils"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	"github.com/urfave/cli/v2"
-	"time"
 )
 
 func ApplyFlagsForZkConfig(ctx *cli.Context, cfg *ethconfig.Config) {

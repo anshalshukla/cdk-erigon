@@ -1,8 +1,9 @@
 package ethconfig
 
 import (
-	"github.com/ledgerwatch/erigon-lib/common"
 	"time"
+
+	"github.com/ledgerwatch/erigon-lib/common"
 )
 
 type Zk struct {

@@ -21,7 +21,6 @@ import (
 	"github.com/ledgerwatch/erigon/eth/stagedsync/stages"
 	"github.com/ledgerwatch/erigon/rpc"
 	"github.com/ledgerwatch/erigon/turbo/rpchelper"
-	"github.com/ledgerwatch/erigon/zk/datastream/server"
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	"github.com/ledgerwatch/erigon/zk/legacy_executor_verifier"
 	types "github.com/ledgerwatch/erigon/zk/rpcdaemon"
@@ -139,13 +138,14 @@ func (api *ZkEvmAPIImpl) IsBlockVirtualized(ctx context.Context, blockNumber rpc
 		return false, err
 	}
 
-	latestSequencedBatch, err := getLatestSequencedBatchNo(tx)
+	hermezDb := hermez_db.NewHermezDbReader(tx)
+	latestSequencedBatch, err := hermezDb.GetLatestSequence()
 	if err != nil {
 		return false, err
 	}
 
 	// if the batch is lower than the latest sequenced then it must be virtualized
-	return batchNum <= latestSequencedBatch, nil
+	return batchNum <= latestSequencedBatch.BatchNo, nil
 }
 
 // BatchNumberByBlockNumber returns the batch number of the block
@@ -190,14 +190,15 @@ func (api *ZkEvmAPIImpl) VirtualBatchNumber(ctx context.Context) (hexutil.Uint64
 	}
 	defer tx.Rollback()
 
-	latestSequencedBatch, err := getLatestSequencedBatchNo(tx)
+	hermezDb := hermez_db.NewHermezDbReader(tx)
+	latestSequencedBatch, err := hermezDb.GetLatestSequence()
 	if err != nil {
-		return 0, err
+		return hexutil.Uint64(0), err
 	}
 
 	// todo: what if this number is the same as the last verified batch number?  do we return 0?
 
-	return hexutil.Uint64(latestSequencedBatch), nil
+	return hexutil.Uint64(latestSequencedBatch.BatchNo), nil
 }
 
 // VerifiedBatchNumber returns the latest verified batch number
@@ -455,32 +456,6 @@ func (api *ZkEvmAPIImpl) GetProverInput(ctx context.Context, batchNumber uint64,
 	}, nil
 }
 
-func getStreamBytes(
-	tx kv.Tx,
-	batchNumber uint64,
-	blockNumbers []uint64,
-	lastBlock *eritypes.Block,
-	hDb *hermez_db.HermezDbReader,
-	chainId uint64,
-) ([]byte, error) {
-	streamServer := server.NewDataStreamServer(nil, chainId, server.ExecutorOperationMode)
-	var streamBytes []byte
-	for _, blockNumber := range blockNumbers {
-		block, err := rawdb.ReadBlockByNumber(tx, blockNumber)
-		if err != nil {
-			return nil, err
-		}
-		sBytes, err := streamServer.CreateAndBuildStreamEntryBytes(block, hDb, lastBlock, batchNumber, true)
-		if err != nil {
-			return nil, err
-		}
-		streamBytes = append(streamBytes, sBytes...)
-		lastBlock = block
-	}
-	return streamBytes, nil
-
-}
-
 func getLastBlockInBatchNumber(tx kv.Tx, batchNumber uint64) (uint64, error) {
 	c, err := tx.Cursor(hermez_db.BLOCKBATCHES)
 	if err != nil {
@@ -571,36 +546,6 @@ func getBatchNoByL2Block(tx kv.Tx, l2BlockNo uint64) (uint64, error) {
 	return hermez_db.BytesToUint64(v), nil
 }
 
-func getLatestSequencedBatchNo(tx kv.Tx) (uint64, error) {
-	c, err := tx.Cursor(hermez_db.L1SEQUENCES)
-	if err != nil {
-		return 0, err
-	}
-	defer c.Close()
-
-	var batchNo uint64
-	var k []byte
-	for k, _, err = c.Last(); k != nil; k, _, err = c.Prev() {
-		if err != nil {
-			return 0, err
-		}
-
-		if k == nil {
-			continue
-		}
-
-		_, batch, err := hermez_db.SplitKey(k)
-		if err != nil {
-			return 0, err
-		}
-
-		batchNo = batch
-		break
-	}
-
-	return batchNo, nil
-}
-
 func getGlobalExitRoot(tx kv.Tx, l2Block uint64) (common.Hash, error) {
 	d, err := tx.GetOne(hermez_db.BLOCK_GLOBAL_EXIT_ROOTS, hermez_db.Uint64ToBytes(l2Block))
 	if err != nil {
@@ -655,6 +600,7 @@ func convertBlockToRpcBlock(
 
 	if full {
 		for idx, tx := range orig.Transactions() {
+			gasPrice := tx.GetPrice()
 			v, r, s := tx.RawSignatureValues()
 			var sender common.Address
 			if len(senders) > idx {
@@ -666,12 +612,12 @@ func convertBlockToRpcBlock(
 			}
 			var receipt *types.Receipt
 			if len(receipts) > idx {
-				receipt = convertReceipt(receipts[idx], sender, tx.GetTo(), tx.GetPrice(), effectiveGasPricePercentage)
+				receipt = convertReceipt(receipts[idx], sender, tx.GetTo(), gasPrice, effectiveGasPricePercentage)
 			}
 
 			tran := types.Transaction{
 				Nonce:       types.ArgUint64(tx.GetNonce()),
-				GasPrice:    types.ArgBig(*tx.GetPrice().ToBig()),
+				GasPrice:    types.ArgBig(*gasPrice.ToBig()),
 				Gas:         types.ArgUint64(tx.GetGas()),
 				To:          tx.GetTo(),
 				Value:       types.ArgBig(*tx.GetValue().ToBig()),
@@ -722,13 +668,12 @@ func convertReceipt(
 
 	var effectiveGasPrice *types.ArgBig
 	if gasPrice != nil {
-		gas := core.CalculateEffectiveGas(gasPrice, effectiveGasPricePercentage)
+		gas := core.CalculateEffectiveGas(gasPrice.Clone(), effectiveGasPricePercentage)
 		asBig := types.ArgBig(*gas.ToBig())
 		effectiveGasPrice = &asBig
 	}
 
 	return &types.Receipt{
-		Root:              common.BytesToHash(r.PostState),
 		CumulativeGasUsed: types.ArgUint64(r.CumulativeGasUsed),
 		LogsBloom:         eritypes.CreateBloom(eritypes.Receipts{r}),
 		Logs:              logs,

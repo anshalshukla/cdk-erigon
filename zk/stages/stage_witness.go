@@ -363,7 +363,7 @@ func (g *WitnessGenerator) GenerateWitnessByBatch(tx kv.Tx, ctx context.Context,
 	return g.GenerateWitness(tx, ctx, startBlock, endBlock, debug, full)
 }
 
-func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug, full bool) ([]byte, error) {
+func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug, witnessFull bool) ([]byte, error) {
 	if startBlock > endBlock {
 		return nil, ErrEndBeforeStart
 	}
@@ -468,10 +468,10 @@ func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startB
 			return nil, err
 		}
 
-		var globalExitRoots []*dstypes.GerUpdate
+		var globalExitRoots []dstypes.GerUpdate
 
 		if gersInBetween != nil {
-			globalExitRoots = append(globalExitRoots, gersInBetween...)
+			globalExitRoots = append(globalExitRoots, *gersInBetween...)
 		}
 
 		blockGer, err := hermezDb.GetBlockGlobalExitRoot(blockNum)
@@ -485,7 +485,7 @@ func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startB
 				GlobalExitRoot: blockGer,
 				Timestamp:      block.Header().Time,
 			}
-			globalExitRoots = append(globalExitRoots, &blockGerUpdate)
+			globalExitRoots = append(globalExitRoots, blockGerUpdate)
 		}
 
 		for _, ger := range globalExitRoots {
@@ -518,7 +518,7 @@ func (g *WitnessGenerator) GenerateWitness(tx kv.Tx, ctx context.Context, startB
 	// if full is true, we will send all the nodes to the witness
 	rl = &trie.AlwaysTrueRetainDecider{}
 
-	if !full {
+	if !witnessFull {
 		rl, err = tds.ResolveSMTRetainList()
 		if err != nil {
 			return nil, err
@@ -551,12 +551,13 @@ func populateDbTables(batch *memdb.MemoryMutation) error {
 		db2.TableAccountValues,
 		db2.TableMetadata,
 		db2.TableHashKey,
-		db2.TableLastRoot,
+		db2.TableStats,
 		hermez_db.TX_PRICE_PERCENTAGE,
 		hermez_db.BLOCKBATCHES,
 		hermez_db.BLOCK_GLOBAL_EXIT_ROOTS,
 		hermez_db.GLOBAL_EXIT_ROOTS_BATCHES,
 		hermez_db.STATE_ROOTS,
+		hermez_db.BATCH_WITNESSES,
 	}
 
 	for _, t := range tables {

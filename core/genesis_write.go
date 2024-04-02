@@ -666,11 +666,13 @@ func GenesisBlockByChainName(chain string) *types.Genesis {
 		return HermezMainnetShadowforkGenesisBlock()
 	case networkname.HermezLocalDevnetChainName:
 		return HermezLocalDevnetGenesisBlock()
+	case networkname.HermezESTestChainName:
+		return HermezESTestGenesisBlock()
 	case networkname.HermezEtrogChainName:
 		return HermezEtrogGenesisBlock()
 	case networkname.HermezCardonaChainName:
 		return HermezCardonaGenesisBlock()
-	case networkname.HermezCardonaInternalChainName:
+	case networkname.HermezBaliChainName:
 		return HermezCardonaInternalGenesisBlock()
 	case networkname.X1TestnetChainName:
 		return X1TestnetGenesisBlock()

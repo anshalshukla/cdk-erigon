@@ -12,6 +12,7 @@ import (
 	"github.com/ledgerwatch/erigon/core/rawdb"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/ledgerwatch/erigon/zk/datastream/server"
+	dstypes "github.com/ledgerwatch/erigon/zk/datastream/types"
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 	"github.com/ledgerwatch/erigon/zk/legacy_executor_verifier/proto/github.com/0xPolygonHermez/zkevm-node/state/runtime/executor"
 	"github.com/ledgerwatch/erigon/zk/syncer"
@@ -33,6 +34,7 @@ type VerifierRequest struct {
 type VerifierResponse struct {
 	BatchNumber uint64
 	Valid       bool
+	Witness     []byte
 }
 
 type ILegacyExecutor interface {
@@ -44,11 +46,11 @@ type WitnessGenerator interface {
 }
 
 type LegacyExecutorVerifier struct {
-	db            kv.RwDB
-	cfg           ethconfig.Zk
-	executors     []ILegacyExecutor
-	executorLocks []*sync.Mutex
-	available     *sync.Cond
+	db                 kv.RwDB
+	cfg                ethconfig.Zk
+	executors          []ILegacyExecutor
+	executorNumberLock *sync.Mutex
+	executorNumber     int
 
 	requestChan   chan *VerifierRequest
 	responseChan  chan *VerifierResponse
@@ -77,21 +79,20 @@ func NewLegacyExecutorVerifier(
 
 	streamServer := server.NewDataStreamServer(nil, chainCfg.ChainID.Uint64(), server.ExecutorOperationMode)
 
-	availableLock := sync.Mutex{}
 	verifier := &LegacyExecutorVerifier{
-		cfg:              cfg,
-		executors:        executors,
-		db:               db,
-		executorLocks:    executorLocks,
-		available:        sync.NewCond(&availableLock),
-		requestChan:      make(chan *VerifierRequest, maximumInflightRequests),
-		responseChan:     make(chan *VerifierResponse, maximumInflightRequests),
-		responses:        make([]*VerifierResponse, 0),
-		responseMutex:    &sync.Mutex{},
-		quit:             make(chan struct{}),
-		streamServer:     streamServer,
-		witnessGenerator: witnessGenerator,
-		l1Syncer:         l1Syncer,
+		cfg:                cfg,
+		executors:          executors,
+		db:                 db,
+		executorNumberLock: &sync.Mutex{},
+		executorNumber:     0,
+		requestChan:        make(chan *VerifierRequest, maximumInflightRequests),
+		responseChan:       make(chan *VerifierResponse, maximumInflightRequests),
+		responses:          make([]*VerifierResponse, 0),
+		responseMutex:      &sync.Mutex{},
+		quit:               make(chan struct{}),
+		streamServer:       streamServer,
+		witnessGenerator:   witnessGenerator,
+		l1Syncer:           l1Syncer,
 	}
 
 	return verifier
@@ -137,8 +138,13 @@ func (v *LegacyExecutorVerifier) handleRequest(ctx context.Context, request *Ver
 		return nil
 	}
 
-	// todo [zkevm] for now just using one executor but we need to use more
-	execer := v.executors[0]
+	v.executorNumberLock.Lock()
+	v.executorNumber++
+	if v.executorNumber >= len(v.executors) {
+		v.executorNumber = 0
+	}
+	v.executorNumberLock.Unlock()
+	execer := v.executors[v.executorNumber]
 
 	// mapmutation has some issue with us not having a quit channel on the context call to `Done` so
 	// here we're creating a cancelable context and just deferring the cancel
@@ -213,6 +219,7 @@ func (v *LegacyExecutorVerifier) handleRequest(ctx context.Context, request *Ver
 	response := &VerifierResponse{
 		BatchNumber: request.BatchNumber,
 		Valid:       ok,
+		Witness:     witness,
 	}
 	v.responseChan <- response
 
@@ -225,17 +232,29 @@ func (v *LegacyExecutorVerifier) GetStreamBytes(request *VerifierRequest, tx kv.
 		return nil, err
 	}
 	var streamBytes []byte
+
+	// as we only ever use the executor verifier for whole batches we can safely assume that the previous batch
+	// will always be the request batch - 1 and that the first block in the batch will be at the batch
+	// boundary so we will always add in the batch bookmark to the stream
+	previousBatch := request.BatchNumber - 1
+
 	for _, blockNumber := range blocks {
 		block, err := rawdb.ReadBlockByNumber(tx, blockNumber)
 		if err != nil {
 			return nil, err
 		}
-		sBytes, err := v.streamServer.CreateAndBuildStreamEntryBytes(block, hermezDb, lastBlock, request.BatchNumber, true)
+
+		//TODO: get ger updates between blocks
+		gerUpdates := []dstypes.GerUpdate{}
+
+		sBytes, err := v.streamServer.CreateAndBuildStreamEntryBytes(block, hermezDb, lastBlock, request.BatchNumber, previousBatch, true, &gerUpdates)
 		if err != nil {
 			return nil, err
 		}
 		streamBytes = append(streamBytes, sBytes...)
 		lastBlock = block
+		// we only put in the batch bookmark at the start of the stream data once
+		previousBatch = request.BatchNumber
 	}
 	return streamBytes, nil
 }
@@ -279,4 +298,8 @@ func (v *LegacyExecutorVerifier) RemoveResponse(batchNumber uint64) {
 		}
 	}
 	v.responses = result
+}
+
+func (v *LegacyExecutorVerifier) HasExecutors() bool {
+	return len(v.executors) > 0
 }
