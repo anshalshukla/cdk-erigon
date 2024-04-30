@@ -6,9 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gateway-fm/cdk-erigon-lib/kv"
-	"github.com/ledgerwatch/erigon/ethdb"
-	"github.com/ledgerwatch/erigon/ethdb/olddb"
+	"github.com/ledgerwatch/erigon-lib/kv"
+	"github.com/ledgerwatch/erigon-lib/kv/membatch"
 	"github.com/ledgerwatch/erigon/smt/pkg/utils"
 	"github.com/ledgerwatch/log/v3"
 )
@@ -72,8 +71,8 @@ func NewEriDb(tx kv.RwTx) *EriDb {
 }
 
 func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
-	var batch ethdb.DbWithPendingMutations
-	batch = olddb.NewHashBatch(m.kvTx, quitCh, "./tempdb")
+	var batch kv.PendingMutations
+	batch = membatch.NewHashBatch(m.kvTx, quitCh, "./tempdb", log.New())
 	defer func() {
 		batch.Rollback()
 	}()
@@ -81,7 +80,7 @@ func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
 }
 
 func (m *EriDb) CommitBatch() error {
-	if _, ok := m.tx.(ethdb.DbWithPendingMutations); !ok {
+	if _, ok := m.tx.(kv.PendingMutations); !ok {
 		return nil // don't roll back a kvRw tx
 	}
 	err := m.tx.Commit()
@@ -94,7 +93,7 @@ func (m *EriDb) CommitBatch() error {
 }
 
 func (m *EriDb) RollbackBatch() {
-	if _, ok := m.tx.(ethdb.DbWithPendingMutations); !ok {
+	if _, ok := m.tx.(kv.PendingMutations); !ok {
 		return // don't roll back a kvRw tx
 	}
 	m.tx.Rollback()
