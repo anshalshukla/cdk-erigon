@@ -156,11 +156,9 @@ func DecodeTx(encodedTx []byte, efficiencyPercentage byte, forkId uint16) (types
 		encodedTx = append(encodedTx, efficiencyPercentage)
 	}
 
-	data, err := rlp.NewStream(bytes.NewReader(encodedTx), 0).Bytes()
-	if err != nil {
-		return nil, 0, err
-	}
-	tx, err := types.DecodeTransaction(data)
+	data := rlp.NewStream(bytes.NewReader(encodedTx), 0)
+
+	tx, err := types.DecodeRLPTransaction(data, false)
 	if err != nil {
 		return nil, 0, err
 	}

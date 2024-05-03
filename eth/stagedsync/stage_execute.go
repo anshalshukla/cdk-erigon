@@ -457,9 +457,8 @@ func SpawnExecuteBlocksStage(s *StageState, u Unwinder, txc wrap.TxContainer, to
 
 	hermezDb := hermez_db.NewHermezDb(txc.Tx)
 
-	var batch kv.PendingMutations
 	// state is stored through ethdb batches
-	batch = membatch.NewHashBatch(txc.Tx, quit, cfg.dirs.Tmp, logger)
+	batch := membatch.NewHashBatch(txc.Tx, quit, cfg.dirs.Tmp, logger)
 	// avoids stacking defers within the loop
 	defer func() {
 		batch.Close()

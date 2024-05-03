@@ -114,12 +114,12 @@ func SpawnExecuteBlocksStageZk(s *StageState, u Unwinder, tx kv.RwTx, toBlock ui
 
 	hermezDb := hermez_db.NewHermezDb(tx)
 
-	var batch kv.PendingMutations
+	//var batch kv.PendingMutations
 	// state is stored through ethdb batches
-	batch = membatch.NewHashBatch(tx, quit, cfg.dirs.Tmp, logger)
+	batch := membatch.NewHashBatch(tx, quit, cfg.dirs.Tmp, logger)
 	// avoids stacking defers within the loop
 	defer func() {
-		batch.Rollback()
+		batch.Close()
 	}()
 
 	if s.BlockNumber == 0 {
@@ -209,7 +209,7 @@ Loop:
 			if err = s.Update(batch, stageProgress); err != nil {
 				return err
 			}
-			if err = batch.Commit(); err != nil {
+			if err = batch.Flush(ctx, tx); err != nil {
 				return err
 			}
 			if !useExternalTx {
@@ -258,7 +258,7 @@ Loop:
 		return err
 	}
 
-	if err = batch.Commit(); err != nil {
+	if err = batch.Flush(ctx, tx); err != nil {
 		return fmt.Errorf("batch commit: %w", err)
 	}
 

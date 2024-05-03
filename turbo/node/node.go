@@ -3,6 +3,7 @@ package node
 
 import (
 	"context"
+	"strings"
 
 	"github.com/ledgerwatch/erigon-lib/chain/networkname"
 	"github.com/ledgerwatch/erigon-lib/kv"
@@ -67,29 +68,34 @@ type Params struct {
 func NewNodConfigUrfave(ctx *cli.Context, logger log.Logger) *nodecfg.Config {
 	// If we're running a known preset, log it for convenience.
 	chain := ctx.String(utils.ChainFlag.Name)
-	switch chain {
-	case networkname.HoleskyChainName:
-		logger.Info("Starting Erigon on Holesky testnet...")
-	case networkname.SepoliaChainName:
-		logger.Info("Starting Erigon on Sepolia testnet...")
-	case networkname.GoerliChainName:
-		logger.Info("Starting Erigon on Görli testnet...")
-	case networkname.DevChainName:
-		logger.Info("Starting Erigon in ephemeral dev mode...")
-	case networkname.MumbaiChainName:
-		logger.Info("Starting Erigon on Mumbai testnet...")
-	case networkname.AmoyChainName:
-		logger.Info("Starting Erigon on Amoy testnet...")
-	case networkname.BorMainnetChainName:
-		logger.Info("Starting Erigon on Bor Mainnet...")
-	case networkname.BorDevnetChainName:
-		logger.Info("Starting Erigon on Bor Devnet...")
-	case "", networkname.MainnetChainName:
-		if !ctx.IsSet(utils.NetworkIdFlag.Name) {
-			logger.Info("Starting Erigon on Ethereum mainnet...")
+
+	if strings.HasPrefix(chain, "dynamic") {
+		log.Info("Starting Erigon on dynamic chain", "chain", chain)
+	} else {
+		switch chain {
+		case networkname.HoleskyChainName:
+			logger.Info("Starting Erigon on Holesky testnet...")
+		case networkname.SepoliaChainName:
+			logger.Info("Starting Erigon on Sepolia testnet...")
+		case networkname.GoerliChainName:
+			logger.Info("Starting Erigon on Görli testnet...")
+		case networkname.DevChainName:
+			logger.Info("Starting Erigon in ephemeral dev mode...")
+		case networkname.MumbaiChainName:
+			logger.Info("Starting Erigon on Mumbai testnet...")
+		case networkname.AmoyChainName:
+			logger.Info("Starting Erigon on Amoy testnet...")
+		case networkname.BorMainnetChainName:
+			logger.Info("Starting Erigon on Bor Mainnet...")
+		case networkname.BorDevnetChainName:
+			logger.Info("Starting Erigon on Bor Devnet...")
+		case "", networkname.MainnetChainName:
+			if !ctx.IsSet(utils.NetworkIdFlag.Name) {
+				logger.Info("Starting Erigon on Ethereum mainnet...")
+			}
+		default:
+			logger.Info("Starting Erigon on", "devnet", chain)
 		}
-	default:
-		logger.Info("Starting Erigon on", "devnet", chain)
 	}
 
 	nodeConfig := NewNodeConfig()

@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
 	"math/big"
 	"net"
 	"os"
@@ -37,18 +36,12 @@ import (
 	"github.com/erigontech/mdbx-go/mdbx"
 	lru "github.com/hashicorp/golang-lru/arc/v2"
 	"github.com/holiman/uint256"
-	"github.com/ledgerwatch/erigon/cl/clparams"
-	"github.com/ledgerwatch/erigon/cl/persistence/db_config"
-	"github.com/ledgerwatch/erigon/cl/persistence/format/snapshot_format/getters"
 	"github.com/ledgerwatch/erigon/zk/sequencer"
 	"github.com/ledgerwatch/log/v3"
 	"golang.org/x/exp/slices"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/emptypb"
-
-	clcore "github.com/ledgerwatch/erigon/cl/phase1/core"
-	executionclient "github.com/ledgerwatch/erigon/cl/phase1/execution_client"
 
 	log2 "github.com/0xPolygonHermez/zkevm-data-streamer/log"
 	"github.com/ledgerwatch/erigon-lib/chain"
@@ -78,7 +71,6 @@ import (
 	"github.com/ledgerwatch/erigon-lib/txpool"
 	types2 "github.com/ledgerwatch/erigon-lib/types"
 	"github.com/ledgerwatch/erigon-lib/wrap"
-	"github.com/ledgerwatch/erigon/cmd/caplin/caplin1"
 	"github.com/ledgerwatch/erigon/cmd/rpcdaemon/cli"
 	"github.com/ledgerwatch/erigon/common/debug"
 	"github.com/ledgerwatch/erigon/consensus"
@@ -120,7 +112,6 @@ import (
 	"github.com/ledgerwatch/erigon/turbo/engineapi/engine_block_downloader"
 	"github.com/ledgerwatch/erigon/turbo/engineapi/engine_helpers"
 	"github.com/ledgerwatch/erigon/turbo/execution/eth1"
-	"github.com/ledgerwatch/erigon/turbo/execution/eth1/eth1_chain_reader.go"
 	"github.com/ledgerwatch/erigon/turbo/jsonrpc"
 	"github.com/ledgerwatch/erigon/turbo/services"
 	"github.com/ledgerwatch/erigon/turbo/shards"
@@ -806,11 +797,11 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 
 	backend.ethBackendRPC, backend.miningRPC, backend.stateChangesClient = ethBackendRPC, miningRPC, stateDiffClient
 
-	backend.syncStages = stages2.NewDefaultStages(backend.sentryCtx, backend.chainDB, snapDb, p2pConfig, config, backend.sentriesClient, backend.notifications, backend.downloaderClient,
-		blockReader, blockRetire, backend.agg, backend.silkworm, backend.forkValidator, heimdallClient, recents, signatures, logger)
-	backend.syncUnwindOrder = stagedsync.DefaultUnwindOrder
-	backend.syncPruneOrder = stagedsync.DefaultPruneOrder
-	backend.stagedSync = stagedsync.New(config.Sync, backend.syncStages, backend.syncUnwindOrder, backend.syncPruneOrder, logger)
+	// backend.syncStages = stages2.NewDefaultStages(backend.sentryCtx, backend.chainDB, snapDb, p2pConfig, config, backend.sentriesClient, backend.notifications, backend.downloaderClient,
+	// 	blockReader, blockRetire, backend.agg, backend.silkworm, backend.forkValidator, heimdallClient, recents, signatures, logger)
+	// backend.syncUnwindOrder = stagedsync.DefaultUnwindOrder
+	// backend.syncPruneOrder = stagedsync.DefaultPruneOrder
+	// backend.stagedSync = stagedsync.New(config.Sync, backend.syncStages, backend.syncUnwindOrder, backend.syncPruneOrder, logger)
 
 	hook := stages2.NewHook(backend.sentryCtx, backend.chainDB, backend.notifications, backend.stagedSync, backend.blockReader, backend.chainConfig, backend.logger, backend.sentriesClient.SetStatus)
 
@@ -847,82 +838,82 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		config.Miner.EnabledPOS)
 	backend.engineBackendRPC = engineBackendRPC
 
-	var executionEngine executionclient.ExecutionEngine
-	// Gnosis has too few blocks on his network for phase2 to work. Once we have proper snapshot automation, it can go back to normal.
-	if config.NetworkID == uint64(clparams.GnosisNetwork) || config.NetworkID == uint64(clparams.HoleskyNetwork) || config.NetworkID == uint64(clparams.GoerliNetwork) {
-		// Read the jwt secret
-		jwtSecret, err := cli.ObtainJWTSecret(&stack.Config().Http, logger)
-		if err != nil {
-			return nil, err
-		}
-		executionEngine, err = executionclient.NewExecutionClientRPC(jwtSecret, stack.Config().Http.AuthRpcHTTPListenAddress, stack.Config().Http.AuthRpcPort)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		executionEngine, err = executionclient.NewExecutionClientDirect(eth1_chain_reader.NewChainReaderEth1(chainConfig, executionRpc, 1000))
-		if err != nil {
-			return nil, err
-		}
-	}
+	// var executionEngine executionclient.ExecutionEngine
+	// // Gnosis has too few blocks on his network for phase2 to work. Once we have proper snapshot automation, it can go back to normal.
+	// if config.NetworkID == uint64(clparams.GnosisNetwork) || config.NetworkID == uint64(clparams.HoleskyNetwork) || config.NetworkID == uint64(clparams.GoerliNetwork) {
+	// 	// Read the jwt secret
+	// 	jwtSecret, err := cli.ObtainJWTSecret(&stack.Config().Http, logger)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	executionEngine, err = executionclient.NewExecutionClientRPC(jwtSecret, stack.Config().Http.AuthRpcHTTPListenAddress, stack.Config().Http.AuthRpcPort)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// } else {
+	// 	executionEngine, err = executionclient.NewExecutionClientDirect(eth1_chain_reader.NewChainReaderEth1(chainConfig, executionRpc, 1000))
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// }
 
-	// If we choose not to run a consensus layer, run our embedded.
-	if config.InternalCL && clparams.EmbeddedSupported(config.NetworkID) {
-		genesisCfg, networkCfg, beaconCfg := clparams.GetConfigsByNetwork(clparams.NetworkType(config.NetworkID))
-		if err != nil {
-			return nil, err
-		}
-		state, err := clcore.RetrieveBeaconState(ctx, beaconCfg, genesisCfg,
-			clparams.GetCheckpointSyncEndpoint(clparams.NetworkType(config.NetworkID)))
-		if err != nil {
-			return nil, err
-		}
+	// // If we choose not to run a consensus layer, run our embedded.
+	// if config.InternalCL && clparams.EmbeddedSupported(config.NetworkID) {
+	// 	genesisCfg, networkCfg, beaconCfg := clparams.GetConfigsByNetwork(clparams.NetworkType(config.NetworkID))
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
+	// 	state, err := clcore.RetrieveBeaconState(ctx, beaconCfg, genesisCfg,
+	// 		clparams.GetCheckpointSyncEndpoint(clparams.NetworkType(config.NetworkID)))
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		pruneBlobDistance := uint64(128600)
-		if config.CaplinConfig.BlobBackfilling || config.CaplinConfig.BlobPruningDisabled {
-			pruneBlobDistance = math.MaxUint64
-		}
+	// 	pruneBlobDistance := uint64(128600)
+	// 	if config.CaplinConfig.BlobBackfilling || config.CaplinConfig.BlobPruningDisabled {
+	// 		pruneBlobDistance = math.MaxUint64
+	// 	}
 
-		indiciesDB, blobStorage, err := caplin1.OpenCaplinDatabase(ctx, db_config.DefaultDatabaseConfiguration, beaconCfg, genesisCfg, dirs.CaplinIndexing, dirs.CaplinBlobs, executionEngine, false, pruneBlobDistance)
-		if err != nil {
-			return nil, err
-		}
+	// 	indiciesDB, blobStorage, err := caplin1.OpenCaplinDatabase(ctx, db_config.DefaultDatabaseConfiguration, beaconCfg, genesisCfg, dirs.CaplinIndexing, dirs.CaplinBlobs, executionEngine, false, pruneBlobDistance)
+	// 	if err != nil {
+	// 		return nil, err
+	// 	}
 
-		go func() {
-			eth1Getter := getters.NewExecutionSnapshotReader(ctx, beaconCfg, blockReader, backend.chainDB)
-			if err := caplin1.RunCaplinPhase1(ctx, executionEngine, config, networkCfg, beaconCfg, genesisCfg, state, dirs, eth1Getter, backend.downloaderClient, config.CaplinConfig.Backfilling, config.CaplinConfig.BlobBackfilling, config.CaplinConfig.Archive, indiciesDB, blobStorage, creds); err != nil {
-				logger.Error("could not start caplin", "err", err)
-			}
-			ctxCancel()
-		}()
-	}
+	// 	go func() {
+	// 		eth1Getter := getters.NewExecutionSnapshotReader(ctx, beaconCfg, blockReader, backend.chainDB)
+	// 		if err := caplin1.RunCaplinPhase1(ctx, executionEngine, config, networkCfg, beaconCfg, genesisCfg, state, dirs, eth1Getter, backend.downloaderClient, config.CaplinConfig.Backfilling, config.CaplinConfig.BlobBackfilling, config.CaplinConfig.Archive, indiciesDB, blobStorage, creds); err != nil {
+	// 			logger.Error("could not start caplin", "err", err)
+	// 		}
+	// 		ctxCancel()
+	// 	}()
+	// }
 
-	if config.PolygonSync {
-		// TODO - pending sentry multi client refactor
-		//      - sentry multi client should conform to the SentryClient interface and internally
-		//        multiplex
-		//      - for now we just use 1 sentry
-		var sentryClient direct.SentryClient
-		for _, client := range sentries {
-			if client.Protocol() == direct.ETH68 {
-				sentryClient = client
-				break
-			}
-		}
-		if sentryClient == nil {
-			return nil, errors.New("nil sentryClient for polygon sync")
-		}
+	// if config.PolygonSync {
+	// 	// TODO - pending sentry multi client refactor
+	// 	//      - sentry multi client should conform to the SentryClient interface and internally
+	// 	//        multiplex
+	// 	//      - for now we just use 1 sentry
+	// 	var sentryClient direct.SentryClient
+	// 	for _, client := range sentries {
+	// 		if client.Protocol() == direct.ETH68 {
+	// 			sentryClient = client
+	// 			break
+	// 		}
+	// 	}
+	// 	if sentryClient == nil {
+	// 		return nil, errors.New("nil sentryClient for polygon sync")
+	// 	}
 
-		backend.polygonSyncService = polygonsync.NewService(
-			logger,
-			chainConfig,
-			sentryClient,
-			p2pConfig.MaxPeers,
-			statusDataProvider,
-			config.HeimdallURL,
-			executionEngine,
-		)
-	}
+	// 	backend.polygonSyncService = polygonsync.NewService(
+	// 		logger,
+	// 		chainConfig,
+	// 		sentryClient,
+	// 		p2pConfig.MaxPeers,
+	// 		statusDataProvider,
+	// 		config.HeimdallURL,
+	// 		executionEngine,
+	// 	)
+	// }
 
 	tx, err := backend.chainDB.BeginRw(ctx)
 	if err != nil {
@@ -975,7 +966,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		}
 
 		// entering ZK territory!
-		cfg := backend.config
+		cfg := backend.config.Zk
 		backend.etherMan = newEtherMan(cfg, chainConfig.ChainName)
 
 		isSequencer := sequencer.IsSequencer()
@@ -983,7 +974,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 		var l1Contracts []libcommon.Address
 		if isSequencer {
 			l1Topics = [][]libcommon.Hash{{contracts.UpdateL1InfoTreeTopic, contracts.InitialSequenceBatchesTopic}}
-			l1Contracts = []libcommon.Address{cfg.Zk.AddressGerManager, cfg.Zk.AddressZkevm}
+			l1Contracts = []libcommon.Address{cfg.AddressGerManager, cfg.AddressZkevm}
 		} else {
 			l1Topics = [][]libcommon.Hash{{
 				contracts.SequencedBatchTopicPreEtrog,
@@ -991,15 +982,15 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 				contracts.VerificationTopicPreEtrog,
 				contracts.VerificationTopicEtrog,
 			}}
-			l1Contracts = []libcommon.Address{cfg.Zk.AddressRollup, cfg.Zk.AddressAdmin}
+			l1Contracts = []libcommon.Address{cfg.AddressRollup, cfg.AddressAdmin}
 		}
 
 		backend.l1Syncer = syncer.NewL1Syncer(
 			backend.etherMan.EthClient,
 			l1Contracts,
 			l1Topics,
-			cfg.Zk.L1BlockRange,
-			cfg.Zk.L1QueryDelay,
+			cfg.L1BlockRange,
+			cfg.L1QueryDelay,
 		)
 
 		if isSequencer {
@@ -1016,9 +1007,9 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 			)
 
 			var legacyExecutors []legacy_executor_verifier.ILegacyExecutor
-			if len(cfg.Zk.ExecutorUrls) > 0 && cfg.Zk.ExecutorUrls[0] != "" {
+			if len(cfg.ExecutorUrls) > 0 && cfg.ExecutorUrls[0] != "" {
 				levCfg := legacy_executor_verifier.Config{
-					GrpcUrls: cfg.Zk.ExecutorUrls,
+					GrpcUrls: cfg.ExecutorUrls,
 					Timeout:  time.Second * 5,
 				}
 				executors := legacy_executor_verifier.NewExecutors(levCfg)
@@ -1028,7 +1019,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 			}
 
 			verifier := legacy_executor_verifier.NewLegacyExecutorVerifier(
-				*cfg.Zk,
+				*cfg,
 				legacyExecutors,
 				backend.chainConfig,
 				backend.chainDB,
@@ -1076,7 +1067,7 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 
 			backend.nodeType = zkStages.NodeTypeSynchronizer
 
-			datastreamClient := initDataStreamClient(cfg.Zk)
+			datastreamClient := initDataStreamClient(cfg)
 
 			backend.syncStages = stages2.NewDefaultZkStages(
 				backend.sentryCtx,
@@ -1112,15 +1103,15 @@ func New(ctx context.Context, stack *node.Node, config *ethconfig.Config, logger
 }
 
 // creates an EtherMan instance with default parameters
-func newEtherMan(cfg *ethconfig.Config, l2ChainName string) *etherman.Client {
+func newEtherMan(cfg *ethconfig.Zk, l2ChainName string) *etherman.Client {
 	ethmanConf := etherman.Config{
-		URL:                       cfg.Zk.L1RpcUrl,
-		L1ChainID:                 cfg.Zk.L1ChainId,
-		L2ChainID:                 cfg.Zk.L2ChainId,
+		URL:                       cfg.L1RpcUrl,
+		L1ChainID:                 cfg.L1ChainId,
+		L2ChainID:                 cfg.L2ChainId,
 		L2ChainName:               l2ChainName,
-		PoEAddr:                   cfg.Zk.AddressRollup,
-		MaticAddr:                 cfg.Zk.L1MaticContractAddress,
-		GlobalExitRootManagerAddr: cfg.Zk.AddressGerManager,
+		PoEAddr:                   cfg.AddressRollup,
+		MaticAddr:                 cfg.L1MaticContractAddress,
+		GlobalExitRootManagerAddr: cfg.AddressGerManager,
 	}
 
 	em, err := etherman.NewClient(ethmanConf)
@@ -1158,6 +1149,8 @@ func (s *Ethereum) Init(stack *node.Node, config *ethconfig.Config, chainConfig 
 	ctx := s.sentryCtx
 	chainKv := s.chainDB
 	var err error
+
+	s.stagedSync = stagedsync.New(s.config.Sync, s.syncStages, s.syncUnwindOrder, s.syncPruneOrder, s.logger)
 
 	if chainConfig.Bor == nil {
 		s.sentriesClient.Hd.StartPoSDownloader(s.sentryCtx, s.sentriesClient.SendHeaderRequest, s.sentriesClient.Penalize)
@@ -1731,16 +1724,16 @@ func (s *Ethereum) Start() error {
 		s.engine.(*bor.Bor).Start(s.chainDB)
 	}
 
-	if s.silkwormRPCDaemonService != nil {
-		if err := s.silkwormRPCDaemonService.Start(); err != nil {
-			s.logger.Error("silkworm.StartRpcDaemon error", "err", err)
-		}
-	}
-	if s.silkwormSentryService != nil {
-		if err := s.silkwormSentryService.Start(); err != nil {
-			s.logger.Error("silkworm.SentryStart error", "err", err)
-		}
-	}
+	// if s.silkwormRPCDaemonService != nil {
+	// 	if err := s.silkwormRPCDaemonService.Start(); err != nil {
+	// 		s.logger.Error("silkworm.StartRpcDaemon error", "err", err)
+	// 	}
+	// }
+	// if s.silkwormSentryService != nil {
+	// 	if err := s.silkwormSentryService.Start(); err != nil {
+	// 		s.logger.Error("silkworm.SentryStart error", "err", err)
+	// 	}
+	// }
 
 	return nil
 }
