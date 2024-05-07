@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"math/big"
 
 	"fmt"
@@ -80,12 +81,16 @@ func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
 }
 
 func (m *EriDb) CommitBatch() error {
-	if _, ok := m.tx.(kv.PendingMutations); !ok {
+	batch, ok := m.tx.(kv.PendingMutations)
+	if !ok {
+
 		return nil // don't roll back a kvRw tx
 	}
-	err := m.tx.Commit()
+	// err := m.tx.Commit()
+	err := batch.Flush(context.Background(), m.kvTx)
 	if err != nil {
-		m.tx.Rollback()
+		// m.tx.Rollback()
+		batch.Close()
 		return err
 	}
 	m.tx = m.kvTx
