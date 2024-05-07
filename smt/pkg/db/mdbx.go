@@ -75,7 +75,7 @@ func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
 	// var batch kv.PendingMutations
 	batch := membatch.NewHashBatch(m.kvTx, quitCh, "./tempdb", log.New())
 	defer func() {
-		batch.Close()
+		batch.Rollback()
 	}()
 	m.tx = batch
 }
