@@ -28,7 +28,9 @@ import (
 
 	"net/url"
 
-	"github.com/ledgerwatch/erigon/common/dbutils"
+	"os"
+
+	"github.com/ledgerwatch/erigon-lib/kv/dbutils"
 	"github.com/ledgerwatch/erigon/core/systemcontracts"
 	"github.com/ledgerwatch/erigon/core/types/accounts"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
@@ -80,7 +82,7 @@ func StageZkInterHashesCfg(
 	}
 }
 
-func SpawnZkIntermediateHashesStage(s *stagedsync.StageState, u stagedsync.Unwinder, tx kv.RwTx, cfg ZkInterHashesCfg, ctx context.Context, quiet bool) (libcommon.Hash, error) {
+func SpawnZkIntermediateHashesStage(s *stagedsync.StageState, u stagedsync.Unwinder, tx kv.RwTx, cfg ZkInterHashesCfg, ctx context.Context) (root libcommon.Hash, err error) {
 	logPrefix := s.LogPrefix()
 
 	quit := ctx.Done()
@@ -100,6 +102,19 @@ func SpawnZkIntermediateHashesStage(s *stagedsync.StageState, u stagedsync.Unwin
 	if err != nil {
 		return trie.EmptyRoot, err
 	}
+
+	///// DEBUG BISECT /////
+	defer func() {
+		if cfg.zk.DebugLimit > 0 {
+			if err != nil {
+				log.Error("Hashing Failed", "block", to, "err", err)
+				os.Exit(1)
+			} else if to >= cfg.zk.DebugLimit {
+				os.Exit(0)
+			}
+		}
+	}()
+	///////////////////////
 
 	if s.BlockNumber == to {
 		// we already did hash check for this block
@@ -121,11 +136,9 @@ func SpawnZkIntermediateHashesStage(s *stagedsync.StageState, u stagedsync.Unwin
 		expectedRootHash = syncHeadHeader.Root
 		headerHash = syncHeadHeader.Hash()
 	}
-	if !quiet && to > s.BlockNumber+16 {
+	if to > s.BlockNumber+16 {
 		log.Info(fmt.Sprintf("[%s] Generating intermediate hashes", logPrefix), "from", s.BlockNumber, "to", to)
 	}
-
-	var root libcommon.Hash
 
 	shouldRegenerate := to > s.BlockNumber && to-s.BlockNumber > cfg.zk.RebuildTreeAfter
 

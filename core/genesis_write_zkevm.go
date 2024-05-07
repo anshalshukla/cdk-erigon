@@ -3,6 +3,11 @@ package core
 import (
 	"math/big"
 
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/params"
@@ -52,11 +57,11 @@ func HermezCardonaGenesisBlock() *types.Genesis {
 
 func HermezCardonaInternalGenesisBlock() *types.Genesis {
 	return &types.Genesis{
-		Config:     params.HermezCardonaInternalChainConfig,
+		Config:     params.HermezBaliChainConfig,
 		Timestamp:  1701336708,
 		GasLimit:   0x0,
 		Difficulty: big.NewInt(0x0),
-		Alloc:      readPrealloc("allocs/hermez-cardona-internal.json"),
+		Alloc:      readPrealloc("allocs/hermez-bali.json"),
 	}
 }
 
@@ -70,20 +75,40 @@ func HermezLocalDevnetGenesisBlock() *types.Genesis {
 	}
 }
 
-func X1TestnetGenesisBlock() *types.Genesis {
+func HermezESTestGenesisBlock() *types.Genesis {
 	return &types.Genesis{
-		Config:     params.X1TestnetChainConfig,
+		Config:     params.HermezESTestChainConfig,
+		Timestamp:  1710763452,
+		GasLimit:   0x0,
+		Difficulty: big.NewInt(0x0),
+		Alloc:      readPrealloc("allocs/hermez-estest.json"),
+	}
+}
+
+func XLayerTestnetGenesisBlock() *types.Genesis {
+	return &types.Genesis{
+		Config:     params.XLayerTestnetChainConfig,
 		Timestamp:  1699369668,
 		GasLimit:   0x0,
 		Difficulty: big.NewInt(0x0),
-		Alloc:      readPrealloc("allocs/x1-testnet.json"),
+		Alloc:      readPrealloc("allocs/xlayer-testnet.json"),
+	}
+}
+
+func XLayerMainnetGenesisBlock() *types.Genesis {
+	return &types.Genesis{
+		Config:     params.XLayerMainnetChainConfig,
+		Timestamp:  1711785755,
+		GasLimit:   0x0,
+		Difficulty: big.NewInt(0x0),
+		Alloc:      readPrealloc("allocs/xlayer-mainnet.json"),
 	}
 }
 
 func processAccount(s *smt.SMT, root *big.Int, a *types.GenesisAccount, addr libcommon.Address) (*big.Int, error) {
 
 	// store the account balance and nonce
-	r, err := s.SetAccountState(addr.String(), a.Balance, new(big.Int).SetUint64(a.Nonce))
+	_, err := s.SetAccountState(addr.String(), a.Balance, new(big.Int).SetUint64(a.Nonce))
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +129,43 @@ func processAccount(s *smt.SMT, root *big.Int, a *types.GenesisAccount, addr lib
 
 	// store the account storage
 	if len(sm) > 0 {
-		r, err = s.SetContractStorage(addr.String(), sm, nil)
+		_, err = s.SetContractStorage(addr.String(), sm, nil)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return r, nil
+	return s.LastRoot(), nil
+}
+
+func DynamicGenesisBlock(chain string) *types.Genesis {
+	return &types.Genesis{
+		Config:     params.DynamicChainConfig(chain),
+		Timestamp:  0x0,
+		GasLimit:   0x0,
+		Difficulty: big.NewInt(0x0),
+		Alloc:      dynamicPrealloc(chain),
+	}
+}
+
+func dynamicPrealloc(ch string) types.GenesisAlloc {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+
+	basePath := path.Join(homeDir, "dynamic-configs")
+	filename := path.Join(basePath, ch+"-allocs.json")
+
+	f, err := os.Open(filename)
+	if err != nil {
+		panic(fmt.Sprintf("could not open alloc for %s: %v", filename, err))
+	}
+	defer f.Close()
+	decoder := json.NewDecoder(f)
+	alloc := make(types.GenesisAlloc)
+	err = decoder.Decode(&alloc)
+	if err != nil {
+		panic(fmt.Sprintf("could not parse alloc for %s: %v", filename, err))
+	}
+	return alloc
 }

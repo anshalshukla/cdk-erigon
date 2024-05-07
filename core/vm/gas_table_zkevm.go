@@ -8,7 +8,7 @@ import (
 	"github.com/ledgerwatch/erigon/params"
 )
 
-func gasSelfdestruct_zkevm(evm VMInterpreter, contract *Contract, stack *stack.Stack, mem *Memory, memorySize uint64) (uint64, error) {
+func gasSelfdestruct_zkevm(evm *EVM, contract *Contract, stack *stack.Stack, mem *Memory, memorySize uint64) (uint64, error) {
 	var gas uint64
 	var address = libcommon.Address(stack.Back(0).Bytes20())
 

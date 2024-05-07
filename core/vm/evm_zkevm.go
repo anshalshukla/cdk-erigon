@@ -18,8 +18,10 @@ package vm
 
 import (
 	"github.com/holiman/uint256"
+	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon/common/u256"
+	"github.com/ledgerwatch/erigon/core/vm/evmtypes"
 	"github.com/ledgerwatch/erigon/params"
 )
 
@@ -36,6 +38,24 @@ func (evm *EVM) precompile(addr libcommon.Address) (PrecompiledContract, bool) {
 	}
 	p, ok := precompiles[addr]
 	return p, ok
+}
+
+// NewEVM returns a new EVM. The returned EVM is not thread safe and should
+// only ever be used *once*.
+func NewZkEVM(blockCtx evmtypes.BlockContext, txCtx evmtypes.TxContext, state evmtypes.IntraBlockState, chainConfig *chain.Config, zkVmConfig ZkConfig) *EVM {
+	evm := &EVM{
+		Context:         blockCtx,
+		TxContext:       txCtx,
+		intraBlockState: state,
+		config:          zkVmConfig.Config,
+		chainConfig:     chainConfig,
+		chainRules:      chainConfig.Rules(blockCtx.BlockNumber, blockCtx.Time),
+	}
+
+	// [zkevm] change
+	evm.interpreter = NewZKEVMInterpreter(evm, zkVmConfig)
+
+	return evm
 }
 
 // create creates a new contract using code as deployment code.
@@ -65,7 +85,7 @@ func (evm *EVM) createZkEvm(caller ContractRef, codeAndHash *codeAndHash, gas ui
 		err = ErrDepth
 		return nil, libcommon.Address{}, gas, err
 	}
-	if !evm.context.CanTransfer(evm.intraBlockState, caller.Address(), value) {
+	if !evm.Context.CanTransfer(evm.intraBlockState, caller.Address(), value) {
 		err = ErrInsufficientBalance
 		return nil, libcommon.Address{}, gas, err
 	}
@@ -96,15 +116,12 @@ func (evm *EVM) createZkEvm(caller ContractRef, codeAndHash *codeAndHash, gas ui
 	if evm.chainRules.IsSpuriousDragon {
 		evm.intraBlockState.SetNonce(address, 1)
 	}
-	evm.context.Transfer(evm.intraBlockState, caller.Address(), address, value, false /* bailout */)
+	evm.Context.Transfer(evm.intraBlockState, caller.Address(), address, value, false /* bailout */)
 
 	// Initialise a new contract and set the code that is to be used by the EVM.
 	// The contract is a scoped environment for this execution context only.
-	contract := NewContract(caller, AccountRef(address), value, gas, evm.config.SkipAnalysis)
+	contract := NewContract(caller, address, value, gas, evm.config.SkipAnalysis)
 	contract.SetCodeOptionalHash(&address, codeAndHash)
-
-	// zkevm: ensure we set the IsCreate flag here so that zk virtual counters get the correct context
-	contract.IsCreate = true
 
 	if evm.config.NoRecursion && depth > 0 {
 		return nil, address, gas, nil
@@ -166,7 +183,7 @@ func (evm *EVM) call_zkevm(typ OpCode, caller ContractRef, addr libcommon.Addres
 	}
 	if typ == CALL || typ == CALLCODE {
 		// Fail if we're trying to transfer more than the available balance
-		if !value.IsZero() && !evm.context.CanTransfer(evm.intraBlockState, caller.Address(), value) {
+		if !value.IsZero() && !evm.Context.CanTransfer(evm.intraBlockState, caller.Address(), value) {
 			if !bailout {
 				return nil, gas, ErrInsufficientBalance
 			}
@@ -201,7 +218,7 @@ func (evm *EVM) call_zkevm(typ OpCode, caller ContractRef, addr libcommon.Addres
 			}
 			evm.intraBlockState.CreateAccount(addr, false)
 		}
-		evm.context.Transfer(evm.intraBlockState, caller.Address(), addr, value, bailout)
+		evm.Context.Transfer(evm.intraBlockState, caller.Address(), addr, value, bailout)
 	} else if typ == STATICCALL {
 		// We do an AddBalance of zero here, just in order to trigger a touch.
 		// This doesn't matter on Mainnet, where all empties are gone at the time of Byzantium,
@@ -244,11 +261,11 @@ func (evm *EVM) call_zkevm(typ OpCode, caller ContractRef, addr libcommon.Addres
 		codeHash := evm.intraBlockState.GetCodeHash(addrCopy)
 		var contract *Contract
 		if typ == CALLCODE {
-			contract = NewContract(caller, AccountRef(caller.Address()), value, gas, evm.config.SkipAnalysis)
+			contract = NewContract(caller, caller.Address(), value, gas, evm.config.SkipAnalysis)
 		} else if typ == DELEGATECALL {
-			contract = NewContract(caller, AccountRef(caller.Address()), value, gas, evm.config.SkipAnalysis).AsDelegate()
+			contract = NewContract(caller, caller.Address(), value, gas, evm.config.SkipAnalysis).AsDelegate()
 		} else {
-			contract = NewContract(caller, AccountRef(addrCopy), value, gas, evm.config.SkipAnalysis)
+			contract = NewContract(caller, addrCopy, value, gas, evm.config.SkipAnalysis)
 		}
 		contract.SetCallCode(&addrCopy, codeHash, code)
 		readOnly := false

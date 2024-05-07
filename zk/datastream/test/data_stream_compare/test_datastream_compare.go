@@ -23,8 +23,8 @@ func main() {
 	flag.StringVar(&stream2, "stream2", "", "the second stream to pull data from")
 	flag.Parse()
 
-	client1 := client.NewClient(stream1, 0)
-	client2 := client.NewClient(stream2, 0)
+	client1 := client.NewClient(stream1, 0, 0)
+	client2 := client.NewClient(stream2, 0, 0)
 
 	err := client1.Start()
 	if err != nil {
@@ -39,7 +39,7 @@ func main() {
 	}
 
 	initialBookmark := &types.Bookmark{
-		Type: types.BookmarkTypeStart,
+		Type: types.BookmarkTypeBlock,
 		From: 0,
 	}
 

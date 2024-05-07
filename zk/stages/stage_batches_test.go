@@ -14,6 +14,7 @@ import (
 	"github.com/ledgerwatch/erigon/zk/datastream/types"
 	"github.com/ledgerwatch/erigon/zk/hermez_db"
 
+	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,7 +73,7 @@ func TestUnwindBatches(t *testing.T) {
 	require.NoError(t, err)
 
 	dsClient := NewTestDatastreamClient(fullL2Blocks, gerUpdates)
-	cfg := StageBatchesCfg(db1, dsClient)
+	cfg := StageBatchesCfg(db1, dsClient, &ethconfig.Zk{})
 
 	s := &stagedsync.StageState{ID: stages.Batches, BlockNumber: 0}
 	u := &stagedsync.Sync{}

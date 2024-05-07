@@ -35,6 +35,9 @@ type DB interface {
 	SetLastRoot(lr *big.Int) error
 	GetLastRoot() (*big.Int, error)
 
+	SetDepth(uint8) error
+	GetDepth() (uint8, error)
+
 	OpenBatch(quitCh <-chan struct{})
 	CommitBatch() error
 	RollbackBatch()
@@ -486,6 +489,8 @@ func (s *SMT) insert(k utils.NodeKey, v utils.NodeValue8, newValH [4]uint64, old
 
 	utils.RemoveOver(siblings, level+1)
 
+	s.updateDepth(len(siblings))
+
 	for level >= 0 {
 		hashValueIn, err := utils.NodeValue8FromBigIntArray(siblings[level][0:8])
 		if err != nil {
@@ -622,6 +627,35 @@ func (s *SMT) CheckOrphanedNodes(ctx context.Context) int {
 	}
 
 	return len(orphanedNodes)
+}
+
+func (s *SMT) updateDepth(newDepth int) {
+	oldDepth, err := s.Db.GetDepth()
+	if err != nil {
+		oldDepth = 0
+	}
+
+	// if new depth is 255 we should be adding an addition +1 because the tree itself cannot have more than 255 levels [0, 255] (counting starts at 0)
+	if newDepth > 255 {
+		newDepth = 255
+	}
+
+	newDepthAsByte := byte(newDepth & 0xFF)
+	if oldDepth < newDepthAsByte {
+		s.Db.SetDepth(newDepthAsByte)
+	}
+}
+
+/*
+depths are 0 based
+0 means either only root leaf or empty tree
+*/
+func (s *SMT) GetDepth() int {
+	depth, err := s.Db.GetDepth()
+	if err != nil {
+		return 0
+	}
+	return int(depth)
 }
 
 type TraverseAction func(prefix []byte, k utils.NodeKey, v utils.NodeValue12) (bool, error)

@@ -432,7 +432,7 @@ type Transaction struct {
 // GetSender gets the sender from the transaction's signature
 func GetSender(tx types.Transaction) (common.Address, error) {
 	// TODO: fix the hardcoded chain config for the l2
-	signer := types.MakeSigner(params.MainnetChainConfig, 0)
+	signer := types.MakeSigner(params.MainnetChainConfig, 0, 0)
 
 	sender, err := signer.Sender(tx)
 	if err != nil {
@@ -488,7 +488,6 @@ func NewTransaction(
 
 // Receipt structure
 type Receipt struct {
-	Root              common.Hash     `json:"root"`
 	CumulativeGasUsed ArgUint64       `json:"cumulativeGasUsed"`
 	LogsBloom         types.Bloom     `json:"logsBloom"`
 	Logs              []*types.Log    `json:"logs"`
@@ -529,7 +528,6 @@ func NewReceipt(tx types.Transaction, r *types.Receipt) (Receipt, error) {
 		return Receipt{}, err
 	}
 	receipt := Receipt{
-		Root:              common.BytesToHash(r.PostState),
 		CumulativeGasUsed: ArgUint64(r.CumulativeGasUsed),
 		LogsBloom:         r.Bloom,
 		Logs:              logs,

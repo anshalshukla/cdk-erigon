@@ -11,7 +11,7 @@ import (
 )
 
 func TestEriDb(t *testing.T) {
-	dbi, _ := mdbx.NewTemporaryMdbx()
+	dbi, _ := mdbx.NewTemporaryMdbx(context.Background(), t.TempDir())
 	tx, _ := dbi.BeginRw(context.Background())
 	db := NewEriDb(tx)
 	err := CreateEriDbBuckets(tx)
@@ -33,7 +33,7 @@ func TestEriDb(t *testing.T) {
 }
 
 func TestEriDbBatch(t *testing.T) {
-	dbi, _ := mdbx.NewTemporaryMdbx()
+	dbi, _ := mdbx.NewTemporaryMdbx(context.Background(), t.TempDir())
 	tx, _ := dbi.BeginRw(context.Background())
 	db := NewEriDb(tx)
 	err := CreateEriDbBuckets(tx)

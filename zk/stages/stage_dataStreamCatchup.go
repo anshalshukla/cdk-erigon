@@ -3,7 +3,6 @@ package stages
 import (
 	"context"
 	"fmt"
-	"math"
 	"time"
 
 	"github.com/0xPolygonHermez/zkevm-data-streamer/datastreamer"
@@ -18,17 +17,24 @@ import (
 	"github.com/ledgerwatch/log/v3"
 )
 
+var (
+	NodeTypeSequencer    = byte(0)
+	NodeTypeSynchronizer = byte(1)
+)
+
 type DataStreamCatchupCfg struct {
-	db      kv.RwDB
-	stream  *datastreamer.StreamServer
-	chainId uint64
+	db       kv.RwDB
+	stream   *datastreamer.StreamServer
+	chainId  uint64
+	nodeType byte
 }
 
-func StageDataStreamCatchupCfg(stream *datastreamer.StreamServer, db kv.RwDB, chainId uint64) DataStreamCatchupCfg {
+func StageDataStreamCatchupCfg(stream *datastreamer.StreamServer, db kv.RwDB, chainId uint64, nodeType byte) DataStreamCatchupCfg {
 	return DataStreamCatchupCfg{
-		stream:  stream,
-		db:      db,
-		chainId: chainId,
+		stream:   stream,
+		db:       db,
+		chainId:  chainId,
+		nodeType: nodeType,
 	}
 }
 
@@ -38,14 +44,13 @@ func SpawnStageDataStreamCatchup(
 	tx kv.RwTx,
 	cfg DataStreamCatchupCfg,
 ) error {
-
 	logPrefix := s.LogPrefix()
-	log.Info(fmt.Sprintf("[%s]: Starting...", logPrefix))
+	log.Info(fmt.Sprintf("[%s] Starting...", logPrefix))
 	stream := cfg.stream
 
 	if stream == nil {
 		// skip the stage if there is no streamer provided
-		log.Info(fmt.Sprintf("[%s]: no streamer provided, skipping stage", logPrefix))
+		log.Info(fmt.Sprintf("[%s] no streamer provided, skipping stage", logPrefix))
 		return nil
 	}
 
@@ -61,131 +66,167 @@ func SpawnStageDataStreamCatchup(
 		createdTx = true
 	}
 
-	srv := server.NewDataStreamServer(stream, cfg.chainId, server.StandardOperationMode)
+	finalBlockNumber, err := CatchupDatastream(logPrefix, tx, stream, cfg.nodeType, cfg.chainId)
+	if err != nil {
+		return err
+	}
+
+	if createdTx {
+		if err := tx.Commit(); err != nil {
+			log.Error(fmt.Sprintf("[%s] error: %s", logPrefix, err))
+		}
+	}
+
+	log.Info(fmt.Sprintf("[%s] stage complete", logPrefix), "block", finalBlockNumber)
+
+	return err
+}
+
+func CatchupDatastream(logPrefix string, tx kv.RwTx, stream *datastreamer.StreamServer, nodeType byte, chainId uint64) (uint64, error) {
+	srv := server.NewDataStreamServer(stream, chainId, server.StandardOperationMode)
 	reader := hermez_db.NewHermezDbReader(tx)
 
-	// read the highest batch number from the verified stage.  We cannot add data to the stream that
-	// has not been verified by the executor because we cannot unwind this later
-	executorVerifyProgress, err := stages.GetStageProgress(tx, stages.SequenceExecutorVerify)
+	// var highestVerifiedBatch uint64
+
+	// switch nodeType {
+	// case NodeTypeSequencer:
+	// 	// read the highest batch number from the verified stage.  We cannot add data to the stream that
+	// 	// has not been verified by the executor because we cannot unwind this later
+	// 	executorVerifyProgress, err := stages.GetStageProgress(tx, stages.SequenceExecutorVerify)
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
+	// 	highestVerifiedBatch = executorVerifyProgress
+	// case NodeTypeSynchronizer:
+	// 	// synchronizer gets the highest verified batch number in l1 syncer stage
+	// 	highestVerifiedBatchSyncer, err := stages.GetStageProgress(tx, stages.L1VerificationsBatchNo)
+	// 	if err != nil {
+	// 		return 0, err
+	// 	}
+	// 	highestVerifiedBatch = highestVerifiedBatchSyncer
+	// default:
+	// 	return 0, fmt.Errorf("unknown node type: %d", nodeType)
+	// }
+
+	// we might have not executed to that batch yet, so we need to check the highest executed block
+	// and get it's batch
+	highestExecutedBlock, err := stages.GetStageProgress(tx, stages.Execution)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
-	currentBatch, err := stages.GetStageProgress(tx, stages.DataStream)
+	finalBlockNumber := highestExecutedBlock
+
+	previousProgress, err := stages.GetStageProgress(tx, stages.DataStream)
 	if err != nil {
-		return err
+		return 0, err
 	}
+
+	log.Info(fmt.Sprintf("[%s] Getting progress", logPrefix),
+		"highestExecutedBlock", highestExecutedBlock,
+		"adding up to blockNum", finalBlockNumber,
+		"previousProgress", previousProgress,
+	)
 
 	var lastBlock *eritypes.Block
 
 	// skip genesis if we have no data in the stream yet
-	if currentBatch == 0 {
+	if previousProgress == 0 {
 		genesis, err := rawdb.ReadBlockByNumber(tx, 0)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		lastBlock = genesis
 		if err = writeGenesisToStream(genesis, reader, stream, srv); err != nil {
-			return err
+			return 0, err
 		}
-		currentBatch++
-	}
-
-	batchToBlocks, err := preLoadBatchesToBlocks(tx)
-	if err != nil {
-		return err
 	}
 
 	logTicker := time.NewTicker(10 * time.Second)
 
 	if err = stream.StartAtomicOp(); err != nil {
-		return err
+		return 0, err
 	}
+	totalToWrite := finalBlockNumber - previousProgress
 
-	for ; currentBatch <= executorVerifyProgress; currentBatch++ {
+	insertEntryCount := 1000000
+	entries := make([]server.DataStreamEntry, insertEntryCount)
+	index := 0
+	for currentBlockNumber := previousProgress + 1; currentBlockNumber <= finalBlockNumber; currentBlockNumber++ {
 		select {
 		case <-logTicker.C:
 			log.Info(fmt.Sprintf("[%s]: progress", logPrefix),
-				"batch", currentBatch,
-				"target", executorVerifyProgress, "%", math.Round(float64(currentBatch)/float64(executorVerifyProgress)*100))
+				"block", currentBlockNumber,
+				"target", finalBlockNumber, "%", float64(currentBlockNumber-previousProgress)/float64(totalToWrite)*100)
 		default:
 		}
 
-		// get the blocks for this batch
-		blockNumbers, ok := batchToBlocks[currentBatch]
-
-		// if there are no blocks to process just continue - previously this would check for a GER update in
-		// the pre-etrog world but this isn't possible now because of the l1 info tree indexes, so we just
-		// skip on
-		if !ok || len(blockNumbers) == 0 {
-			log.Info(fmt.Sprintf("[%s] found a batch with no blocks during data stream catchup", logPrefix), "batch", currentBatch)
-			currentBatch++
-			continue
-		}
-
-		for _, blockNumber := range blockNumbers {
-			if lastBlock == nil {
-				lastBlock, err = rawdb.ReadBlockByNumber(tx, blockNumber-1)
-				if err != nil {
-					return err
-				}
-			}
-			block, err := rawdb.ReadBlockByNumber(tx, blockNumber)
+		if lastBlock == nil {
+			lastBlock, err = rawdb.ReadBlockByNumber(tx, currentBlockNumber-1)
 			if err != nil {
-				return err
+				return 0, err
 			}
-			if err = srv.CreateAndCommitEntriesToStream(block, reader, lastBlock, currentBatch, true); err != nil {
-				return err
-			}
-			lastBlock = block
 		}
+
+		block, err := rawdb.ReadBlockByNumber(tx, currentBlockNumber)
+		if err != nil {
+			return 0, err
+		}
+
+		batchNum, err := reader.GetBatchNoByL2Block(currentBlockNumber)
+		if err != nil {
+			return 0, err
+		}
+
+		prevBatchNum, err := reader.GetBatchNoByL2Block(currentBlockNumber - 1)
+		if err != nil {
+			return 0, err
+		}
+
+		gersInBetween, err := reader.GetBatchGlobalExitRoots(prevBatchNum, batchNum)
+		if err != nil {
+			return 0, err
+		}
+
+		blockEntries, err := srv.CreateStreamEntries(block, reader, lastBlock, batchNum, prevBatchNum, gersInBetween)
+		if err != nil {
+			return 0, err
+		}
+
+		for _, entry := range *blockEntries {
+			entries[index] = entry
+			index++
+		}
+
+		// basically commit onece 80% of the entries array is filled
+		if index+1 >= insertEntryCount*4/5 {
+			log.Info(fmt.Sprintf("[%s] Commit count reached, committing entries", logPrefix), "block", currentBlockNumber)
+			if err = srv.CommitEntriesToStream(entries[:index], true); err != nil {
+				return 0, err
+			}
+			if err = stages.SaveStageProgress(tx, stages.DataStream, currentBlockNumber); err != nil {
+				return 0, err
+			}
+			entries = make([]server.DataStreamEntry, insertEntryCount)
+			index = 0
+		}
+
+		lastBlock = block
+	}
+
+	if err = srv.CommitEntriesToStream(entries[:index], true); err != nil {
+		return 0, err
 	}
 
 	if err = stream.CommitAtomicOp(); err != nil {
-		return err
+		return 0, err
 	}
 
-	if err = stages.SaveStageProgress(tx, stages.DataStream, currentBatch); err != nil {
-		return err
+	if err = stages.SaveStageProgress(tx, stages.DataStream, finalBlockNumber); err != nil {
+		return 0, err
 	}
 
-	if createdTx {
-		err = tx.Commit()
-		if err != nil {
-			log.Error(fmt.Sprintf("[%s] error: %s", logPrefix, err))
-		}
-	}
-
-	log.Info(fmt.Sprintf("[%s]: stage complete", logPrefix),
-		"batch", currentBatch-1,
-		"target", executorVerifyProgress, "%", math.Round(float64(currentBatch-1)/float64(executorVerifyProgress)*100))
-
-	return err
-}
-
-func preLoadBatchesToBlocks(tx kv.RwTx) (map[uint64][]uint64, error) {
-	// hold the mapping of block batches to block numbers - this is an expensive call so just
-	// do it once
-	// todo: can we not use memory here, could be a problem with a larger chain?
-	batchToBlocks := make(map[uint64][]uint64)
-	c, err := tx.Cursor(hermez_db.BLOCKBATCHES)
-	if err != nil {
-		return nil, err
-	}
-	for k, v, err := c.First(); k != nil; k, v, err = c.Next() {
-		if err != nil {
-			return nil, err
-		}
-		block := hermez_db.BytesToUint64(k)
-		batch := hermez_db.BytesToUint64(v)
-		_, ok := batchToBlocks[batch]
-		if !ok {
-			batchToBlocks[batch] = []uint64{block}
-		} else {
-			batchToBlocks[batch] = append(batchToBlocks[batch], block)
-		}
-	}
-	return batchToBlocks, nil
+	return finalBlockNumber, nil
 }
 
 func writeGenesisToStream(
@@ -215,11 +256,12 @@ func writeGenesisToStream(
 		return err
 	}
 
+	batchBookmark := srv.CreateBookmarkEntry(server.BatchBookmarkType, genesis.NumberU64())
 	bookmark := srv.CreateBookmarkEntry(server.BlockBookmarkType, genesis.NumberU64())
 	blockStart := srv.CreateBlockStartEntry(genesis, batch, uint16(fork), ger, 0, 0, common.Hash{})
 	blockEnd := srv.CreateBlockEndEntry(genesis.NumberU64(), genesis.Hash(), genesis.Root())
 
-	if err = srv.CommitEntriesToStream([]server.DataStreamEntry{bookmark, blockStart, blockEnd}, true); err != nil {
+	if err = srv.CommitEntriesToStream([]server.DataStreamEntry{batchBookmark, bookmark, blockStart, blockEnd}, true); err != nil {
 		return err
 	}
 

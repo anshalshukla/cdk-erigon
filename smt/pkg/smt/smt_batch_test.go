@@ -522,7 +522,7 @@ func initDb(t *testing.T, dbPath string) (kv.RwDB, kv.RwTx, *db.EriDb) {
 	os.RemoveAll(dbPath)
 
 	dbOpts := mdbx.NewMDBX(log.Root()).Path(dbPath).Label(kv.ChainDB).GrowthStep(16 * datasize.MB).RoTxsLimiter(semaphore.NewWeighted(128))
-	database, err := dbOpts.Open()
+	database, err := dbOpts.Open(ctx)
 	if err != nil {
 		t.Fatalf("Cannot create db %e", err)
 	}
@@ -531,9 +531,9 @@ func initDb(t *testing.T, dbPath string) (kv.RwDB, kv.RwTx, *db.EriDb) {
 	if err := migrator.VerifyVersion(database); err != nil {
 		t.Fatalf("Cannot verify db version %e", err)
 	}
-	if err = migrator.Apply(database, dbPath); err != nil {
-		t.Fatalf("Cannot migrate db %e", err)
-	}
+	// if err = migrator.Apply(database, dbPath); err != nil {
+	// 	t.Fatalf("Cannot migrate db %e", err)
+	// }
 
 	// if err := database.Update(context.Background(), func(tx kv.RwTx) (err error) {
 	// 	return params.SetErigonVersion(tx, "test")

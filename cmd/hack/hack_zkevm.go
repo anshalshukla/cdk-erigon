@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"sort"
+	"strings"
+
 	ethereum "github.com/ledgerwatch/erigon"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/kv"
@@ -11,8 +14,6 @@ import (
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/eth/ethconfig"
 	"github.com/ledgerwatch/erigon/zkevm/etherman"
-	"sort"
-	"strings"
 )
 
 func formatBucketKVPair(k, v []byte, bucket string) string {
@@ -115,9 +116,9 @@ func newEtherMan(cfg *ethconfig.Zk) *etherman.Client {
 		URL:                       cfg.L1RpcUrl,
 		L1ChainID:                 cfg.L1ChainId,
 		L2ChainID:                 cfg.L2ChainId,
-		PoEAddr:                   cfg.L1PolygonRollupManager,
+		PoEAddr:                   cfg.AddressRollup,
 		MaticAddr:                 cfg.L1MaticContractAddress,
-		GlobalExitRootManagerAddr: cfg.L1GERManagerContractAddress,
+		GlobalExitRootManagerAddr: cfg.AddressGerManager,
 	}
 
 	em, err := etherman.NewClient(ethmanConf)

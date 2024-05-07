@@ -21,13 +21,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"os"
 	"path"
 
-	erigonchain "github.com/ledgerwatch/erigon-lib/chain"
+	"github.com/ledgerwatch/erigon-lib/chain"
+	"github.com/ledgerwatch/erigon-lib/chain/networkname"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon/chain"
+	"github.com/ledgerwatch/erigon/polygon/bor/borcfg"
+
 	"github.com/ledgerwatch/erigon/common/paths"
-	"github.com/ledgerwatch/erigon/params/networkname"
 )
 
 //go:embed chainspecs
@@ -39,22 +41,35 @@ func readChainSpec(filename string) *chain.Config {
 		panic(fmt.Sprintf("Could not open chainspec for %s: %v", filename, err))
 	}
 	defer f.Close()
+
 	decoder := json.NewDecoder(f)
 	spec := &chain.Config{}
 	err = decoder.Decode(&spec)
 	if err != nil {
 		panic(fmt.Sprintf("Could not parse chainspec for %s: %v", filename, err))
 	}
+
+	if spec.BorJSON != nil {
+		borConfig := &borcfg.BorConfig{}
+		err = json.Unmarshal(spec.BorJSON, borConfig)
+		if err != nil {
+			panic(fmt.Sprintf("Could not parse 'bor' chainspec for %s: %v", filename, err))
+		}
+		spec.Bor = borConfig
+	}
+
 	return spec
 }
 
 // Genesis hashes to enforce below configs on.
 var (
 	MainnetGenesisHash                 = libcommon.HexToHash("0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
+	HoleskyGenesisHash                 = libcommon.HexToHash("0xb5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4")
 	SepoliaGenesisHash                 = libcommon.HexToHash("0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9")
 	RinkebyGenesisHash                 = libcommon.HexToHash("0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177")
 	GoerliGenesisHash                  = libcommon.HexToHash("0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a")
 	MumbaiGenesisHash                  = libcommon.HexToHash("0x7b66506a9ebdbf30d32b43c5f15a3b1216269a1ec3a75aa3182b86176a2b1ca7")
+	AmoyGenesisHash                    = libcommon.HexToHash("0x7202b2b53c5a0836e773e319d18922cc756dd67432f9a1f65352b61f4406c697")
 	BorMainnetGenesisHash              = libcommon.HexToHash("0xa9c28ce2141b56c474f1dc504bee9b01eb1bd7d1a507580d5519d4437a97de1b")
 	BorDevnetGenesisHash               = libcommon.HexToHash("0x5a06b25b0c6530708ea0b98a3409290e39dce6be7f558493aeb6e4b99a172a87")
 	GnosisGenesisHash                  = libcommon.HexToHash("0x4f1dd23188aab3a76b463e4af801b52b1248ef073c648cbdc4c9333d3da79756")
@@ -62,10 +77,12 @@ var (
 	HermezMainnetGenesisHash           = libcommon.HexToHash("0x81005434635456a16f74ff7023fbe0bf423abbc8a8deb093ffff455c0ad3b741")
 	HermezMainnetShadowforkGenesisHash = libcommon.HexToHash("0xe54709058a084845156393707161a7b3347859b1796167ca014354841f68373c")
 	HermezLocalDevnetGenesisHash       = libcommon.HexToHash("0x433043a1b0948d109cd92a6b7e0e5a3f011c761d70eebe3135ec8f7a39815a65")
+	HermezESTestGenesisHash            = libcommon.HexToHash("0x8c630b598fab24a99b59cdd8257f41b35d0aca992f13cd381c7591f5e89eec58")
 	HermezCardonaGenesisHash           = libcommon.HexToHash("0x676c1a76a6c5855a32bdf7c61977a0d1510088a4eeac1330466453b3d08b60b9")
 	HermezCardonaInternalGenesisHash   = libcommon.HexToHash("0x7311011ce6ab98ef0a15e44fe29f7680909588322534d1736361daa678543038")
-	X1TestnetGenesisHash               = libcommon.HexToHash("0x0ffb92e130f1acaabd8b12aa1bb409b46561ef7568cb8aa7eb8d102a6ab76566")
-	HermezEtrogGenesisHash             = libcommon.HexToHash("0xccfed260e3ef666b058dcd577551de8e00c743c47774a39ca7dbcd9214ba370a")
+	XLayerTestnetGenesisHash           = libcommon.HexToHash("0x22a8085892b367833bd7431fa5a90ff6b5d3769167cdaa29ce8571d07bc8f866")
+	XLayerMainnetGenesisHash           = libcommon.HexToHash("0x11f32f605beb94a1acb783cb3b6da6d7975461ce3addf441e7ad60c2ec95e88f")
+	HermezEtrogGenesisHash             = libcommon.HexToHash("0x5e14aefe391fafa040ee0a0fff6afbc1c230853b9684afb9363f3af081db0192")
 )
 
 var (
@@ -77,11 +94,11 @@ var (
 	// MainnetChainConfig is the chain parameters to run a node on the main network.
 	MainnetChainConfig = readChainSpec("chainspecs/mainnet.json")
 
+	// HoleskyChainConfi contains the chain parameters to run a node on the Holesky test network.
+	HoleskyChainConfig = readChainSpec("chainspecs/holesky.json")
+
 	// SepoliaChainConfig contains the chain parameters to run a node on the Sepolia test network.
 	SepoliaChainConfig = readChainSpec("chainspecs/sepolia.json")
-
-	// RinkebyChainConfig contains the chain parameters to run a node on the Rinkeby test network.
-	RinkebyChainConfig = readChainSpec("chainspecs/rinkeby.json")
 
 	// GoerliChainConfig contains the chain parameters to run a node on the Görli test network.
 	GoerliChainConfig = readChainSpec("chainspecs/goerli.json")
@@ -90,7 +107,7 @@ var (
 	// and accepted by the Ethereum core developers into the main net protocol.
 	AllProtocolChanges = &chain.Config{
 		ChainID:                       big.NewInt(1337),
-		Consensus:                     erigonchain.EtHashConsensus,
+		Consensus:                     chain.EtHashConsensus,
 		HomesteadBlock:                big.NewInt(0),
 		TangerineWhistleBlock:         big.NewInt(0),
 		SpuriousDragonBlock:           big.NewInt(0),
@@ -106,14 +123,15 @@ var (
 		TerminalTotalDifficulty:       big.NewInt(0),
 		TerminalTotalDifficultyPassed: true,
 		ShanghaiTime:                  big.NewInt(0),
-		Ethash:                        new(erigonchain.EthashConfig),
+		CancunTime:                    big.NewInt(0),
+		Ethash:                        new(chain.EthashConfig),
 	}
 
 	// AllCliqueProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Clique consensus.
 	AllCliqueProtocolChanges = &chain.Config{
 		ChainID:               big.NewInt(1337),
-		Consensus:             erigonchain.CliqueConsensus,
+		Consensus:             chain.CliqueConsensus,
 		HomesteadBlock:        big.NewInt(0),
 		TangerineWhistleBlock: big.NewInt(0),
 		SpuriousDragonBlock:   big.NewInt(0),
@@ -124,10 +142,12 @@ var (
 		MuirGlacierBlock:      big.NewInt(0),
 		BerlinBlock:           big.NewInt(0),
 		LondonBlock:           big.NewInt(0),
-		Clique:                &erigonchain.CliqueConfig{Period: 0, Epoch: 30000},
+		Clique:                &chain.CliqueConfig{Period: 0, Epoch: 30000},
 	}
 
 	MumbaiChainConfig = readChainSpec("chainspecs/mumbai.json")
+
+	AmoyChainConfig = readChainSpec("chainspecs/amoy.json")
 
 	BorMainnetChainConfig = readChainSpec("chainspecs/bor-mainnet.json")
 
@@ -143,19 +163,23 @@ var (
 
 	HermezLocalDevnetChainConfig = readChainSpec("chainspecs/hermez-dev.json")
 
+	HermezESTestChainConfig = readChainSpec("chainspecs/hermez-estest.json")
+
 	HermezEtrogChainConfig = readChainSpec("chainspecs/hermez-etrog.json")
 
 	HermezCardonaChainConfig = readChainSpec("chainspecs/hermez-cardona.json")
 
-	HermezCardonaInternalChainConfig = readChainSpec("chainspecs/hermez-cardona-internal.json")
+	HermezBaliChainConfig = readChainSpec("chainspecs/hermez-bali.json")
 
-	X1TestnetChainConfig = readChainSpec("chainspecs/x1-testnet.json")
+	XLayerTestnetChainConfig = readChainSpec("chainspecs/xlayer-testnet.json")
+
+	XLayerMainnetChainConfig = readChainSpec("chainspecs/xlayer-mainnet.json")
 
 	CliqueSnapshot = NewSnapshotConfig(10, 1024, 16384, true, "")
 
 	TestChainConfig = &chain.Config{
 		ChainID:               big.NewInt(1337),
-		Consensus:             erigonchain.EtHashConsensus,
+		Consensus:             chain.EtHashConsensus,
 		HomesteadBlock:        big.NewInt(0),
 		TangerineWhistleBlock: big.NewInt(0),
 		SpuriousDragonBlock:   big.NewInt(0),
@@ -165,12 +189,12 @@ var (
 		IstanbulBlock:         big.NewInt(0),
 		MuirGlacierBlock:      big.NewInt(0),
 		BerlinBlock:           big.NewInt(0),
-		Ethash:                new(erigonchain.EthashConfig),
+		Ethash:                new(chain.EthashConfig),
 	}
 
 	TestChainAuraConfig = &chain.Config{
 		ChainID:               big.NewInt(1),
-		Consensus:             erigonchain.AuRaConsensus,
+		Consensus:             chain.AuRaConsensus,
 		HomesteadBlock:        big.NewInt(0),
 		TangerineWhistleBlock: big.NewInt(0),
 		SpuriousDragonBlock:   big.NewInt(0),
@@ -181,7 +205,7 @@ var (
 		MuirGlacierBlock:      big.NewInt(0),
 		BerlinBlock:           big.NewInt(0),
 		LondonBlock:           big.NewInt(0),
-		Aura:                  &erigonchain.AuRaConfig{},
+		Aura:                  &chain.AuRaConfig{},
 	}
 
 	TestRules = TestChainConfig.Rules(0, 0)
@@ -196,6 +220,29 @@ type ConsensusSnapshotConfig struct {
 }
 
 const cliquePath = "clique"
+
+func DynamicChainConfig(ch string) *chain.Config {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		panic(err)
+	}
+
+	basePath := path.Join(homeDir, "dynamic-configs")
+	filename := path.Join(basePath, ch+"-chainspec.json")
+
+	f, err := os.Open(filename)
+	if err != nil {
+		panic(fmt.Sprintf("could not open chainspec for %s: %v", filename, err))
+	}
+	defer f.Close()
+	decoder := json.NewDecoder(f)
+	spec := &chain.Config{}
+	err = decoder.Decode(&spec)
+	if err != nil {
+		panic(fmt.Sprintf("could not parse chainspec for %s: %v", filename, err))
+	}
+	return spec
+}
 
 func NewSnapshotConfig(checkpointInterval uint64, inmemorySnapshots int, inmemorySignatures int, inmemory bool, dbPath string) *ConsensusSnapshotConfig {
 	if len(dbPath) == 0 {
@@ -215,14 +262,18 @@ func ChainConfigByChainName(chain string) *chain.Config {
 	switch chain {
 	case networkname.MainnetChainName:
 		return MainnetChainConfig
+	case networkname.DevChainName:
+		return AllCliqueProtocolChanges
+	case networkname.HoleskyChainName:
+		return HoleskyChainConfig
 	case networkname.SepoliaChainName:
 		return SepoliaChainConfig
-	case networkname.RinkebyChainName:
-		return RinkebyChainConfig
 	case networkname.GoerliChainName:
 		return GoerliChainConfig
 	case networkname.MumbaiChainName:
 		return MumbaiChainConfig
+	case networkname.AmoyChainName:
+		return AmoyChainConfig
 	case networkname.BorMainnetChainName:
 		return BorMainnetChainConfig
 	case networkname.BorDevnetChainName:
@@ -237,16 +288,20 @@ func ChainConfigByChainName(chain string) *chain.Config {
 		return HermezMainnetShadowforkChainConfig
 	case networkname.HermezLocalDevnetChainName:
 		return HermezLocalDevnetChainConfig
+	case networkname.HermezESTestChainName:
+		return HermezESTestChainConfig
 	case networkname.HermezEtrogChainName:
 		return HermezEtrogChainConfig
 	case networkname.HermezCardonaChainName:
 		return HermezCardonaChainConfig
-	case networkname.HermezCardonaInternalChainName:
-		return HermezCardonaInternalChainConfig
-	case networkname.X1TestnetChainName:
-		return X1TestnetChainConfig
+	case networkname.HermezBaliChainName:
+		return HermezBaliChainConfig
+	case networkname.XLayerTestnetChainName:
+		return XLayerTestnetChainConfig
+	case networkname.XLayerMainnetChainName:
+		return XLayerMainnetChainConfig
 	default:
-		return nil
+		return DynamicChainConfig(chain)
 	}
 }
 
@@ -254,14 +309,16 @@ func GenesisHashByChainName(chain string) *libcommon.Hash {
 	switch chain {
 	case networkname.MainnetChainName:
 		return &MainnetGenesisHash
+	case networkname.HoleskyChainName:
+		return &HoleskyGenesisHash
 	case networkname.SepoliaChainName:
 		return &SepoliaGenesisHash
-	case networkname.RinkebyChainName:
-		return &RinkebyGenesisHash
 	case networkname.GoerliChainName:
 		return &GoerliGenesisHash
 	case networkname.MumbaiChainName:
 		return &MumbaiGenesisHash
+	case networkname.AmoyChainName:
+		return &AmoyGenesisHash
 	case networkname.BorMainnetChainName:
 		return &BorMainnetGenesisHash
 	case networkname.BorDevnetChainName:
@@ -276,14 +333,18 @@ func GenesisHashByChainName(chain string) *libcommon.Hash {
 		return &HermezMainnetShadowforkGenesisHash
 	case networkname.HermezLocalDevnetChainName:
 		return &HermezLocalDevnetGenesisHash
+	case networkname.HermezESTestChainName:
+		return &HermezESTestGenesisHash
 	case networkname.HermezEtrogChainName:
 		return &HermezEtrogGenesisHash
 	case networkname.HermezCardonaChainName:
 		return &HermezCardonaGenesisHash
-	case networkname.HermezCardonaInternalChainName:
+	case networkname.HermezBaliChainName:
 		return &HermezCardonaInternalGenesisHash
-	case networkname.X1TestnetChainName:
-		return &X1TestnetGenesisHash
+	case networkname.XLayerTestnetChainName:
+		return &XLayerTestnetGenesisHash
+	case networkname.XLayerMainnetChainName:
+		return &XLayerMainnetGenesisHash
 	default:
 		return nil
 	}
@@ -293,14 +354,16 @@ func ChainConfigByGenesisHash(genesisHash libcommon.Hash) *chain.Config {
 	switch {
 	case genesisHash == MainnetGenesisHash:
 		return MainnetChainConfig
+	case genesisHash == HoleskyGenesisHash:
+		return HoleskyChainConfig
 	case genesisHash == SepoliaGenesisHash:
 		return SepoliaChainConfig
-	case genesisHash == RinkebyGenesisHash:
-		return RinkebyChainConfig
 	case genesisHash == GoerliGenesisHash:
 		return GoerliChainConfig
 	case genesisHash == MumbaiGenesisHash:
 		return MumbaiChainConfig
+	case genesisHash == AmoyGenesisHash:
+		return AmoyChainConfig
 	case genesisHash == BorMainnetGenesisHash:
 		return BorMainnetChainConfig
 	case genesisHash == BorDevnetGenesisHash:
@@ -315,25 +378,58 @@ func ChainConfigByGenesisHash(genesisHash libcommon.Hash) *chain.Config {
 		return HermezMainnetShadowforkChainConfig
 	case genesisHash == HermezLocalDevnetGenesisHash:
 		return HermezLocalDevnetChainConfig
+	case genesisHash == HermezESTestGenesisHash:
+		return HermezESTestChainConfig
 	case genesisHash == HermezCardonaGenesisHash:
 		return HermezCardonaChainConfig
-	case genesisHash == HermezCardonaInternalGenesisHash:
-		return HermezCardonaInternalChainConfig
+	case genesisHash == XLayerTestnetGenesisHash:
+		return XLayerTestnetChainConfig
+	case genesisHash == XLayerMainnetGenesisHash:
+		return XLayerMainnetChainConfig
 	default:
-		panic(fmt.Sprintf("Unknown genesis hash: %s", genesisHash.Hex()))
 		return nil
 	}
 }
 
 func NetworkIDByChainName(chain string) uint64 {
-	switch chain {
-	case networkname.DevChainName:
-		return 1337
-	default:
-		config := ChainConfigByChainName(chain)
-		if config == nil {
-			return 0
-		}
-		return config.ChainID.Uint64()
+	config := ChainConfigByChainName(chain)
+	if config == nil {
+		return 0
 	}
+	return config.ChainID.Uint64()
+}
+
+func IsChainPoS(chainConfig *chain.Config, currentTDProvider func() *big.Int) bool {
+	return isChainIDPoS(chainConfig.ChainID) || hasChainPassedTerminalTD(chainConfig, currentTDProvider)
+}
+
+func isChainIDPoS(chainID *big.Int) bool {
+	ids := []*big.Int{
+		MainnetChainConfig.ChainID,
+		HoleskyChainConfig.ChainID,
+		GoerliChainConfig.ChainID,
+		SepoliaChainConfig.ChainID,
+		GnosisChainConfig.ChainID,
+		ChiadoChainConfig.ChainID,
+	}
+	for _, id := range ids {
+		if id.Cmp(chainID) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasChainPassedTerminalTD(chainConfig *chain.Config, currentTDProvider func() *big.Int) bool {
+	if chainConfig.TerminalTotalDifficultyPassed {
+		return true
+	}
+
+	terminalTD := chainConfig.TerminalTotalDifficulty
+	if terminalTD == nil {
+		return false
+	}
+
+	currentTD := currentTDProvider()
+	return (currentTD != nil) && (terminalTD.Cmp(currentTD) <= 0)
 }

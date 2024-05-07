@@ -139,6 +139,7 @@ const (
 	NotReplaced         DiscardReason = 20 // There was an existing transaction with the same sender and nonce, not enough price bump to replace
 	DuplicateHash       DiscardReason = 21 // There was an existing transaction with the same hash
 	InitCodeTooLarge    DiscardReason = 22 // EIP-3860 - transaction init code is too large
+	UnsupportedTx       DiscardReason = 23 // unsupported transaction type
 )
 
 func (r DiscardReason) String() string {
@@ -189,6 +190,8 @@ func (r DiscardReason) String() string {
 		return "existing tx with same hash"
 	case InitCodeTooLarge:
 		return "initcode too large"
+	case UnsupportedTx:
+		return "unsupported transaction type"
 	default:
 		panic(fmt.Sprintf("discard reason: %d", r))
 	}
@@ -291,6 +294,8 @@ type TxPool struct {
 	started                 atomic.Bool
 	pendingBaseFee          atomic.Uint64
 	blockGasLimit           atomic.Uint64
+	londonBlock             *big.Int
+	isPostLondon            atomic.Bool
 	shanghaiTime            *big.Int
 	isPostShanghai          atomic.Bool
 	allowFreeTransactions   bool
@@ -301,7 +306,7 @@ type TxPool struct {
 	flushMtx *sync.Mutex
 }
 
-func New(newTxs chan types.Announcements, coreDB kv.RoDB, cfg txpoolcfg.Config, zkCfg *ethconfig.Zk, cache kvcache.Cache, chainID uint256.Int, shanghaiTime *big.Int) (*TxPool, error) {
+func New(newTxs chan types.Announcements, coreDB kv.RoDB, cfg txpoolcfg.Config, zkCfg *ethconfig.Zk, cache kvcache.Cache, chainID uint256.Int, shanghaiTime *big.Int, londonBlock *big.Int) (*TxPool, error) {
 	var err error
 	localsHistory, err := simplelru.NewLRU[string, struct{}](10_000, nil)
 	if err != nil {
@@ -339,6 +344,7 @@ func New(newTxs chan types.Announcements, coreDB kv.RoDB, cfg txpoolcfg.Config, 
 		chainID:                 chainID,
 		unprocessedRemoteTxs:    &types.TxSlots{},
 		unprocessedRemoteByHash: map[string]int{},
+		londonBlock:             londonBlock,
 		shanghaiTime:            shanghaiTime,
 		allowFreeTransactions:   zkCfg.AllowFreeTransactions,
 		flushMtx:                &sync.Mutex{},
@@ -604,13 +610,13 @@ func (p *TxPool) ResetYieldedStatus() {
 	}
 }
 
-func (p *TxPool) YieldBest(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas uint64, toSkip mapset.Set[[32]byte]) (bool, int, error) {
-	return p.best(n, txs, tx, onTopOf, availableGas, toSkip)
+func (p *TxPool) YieldBest(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas, availableBlobGas uint64, toSkip mapset.Set[[32]byte]) (bool, int, error) {
+	return p.best(n, txs, tx, onTopOf, availableGas, availableBlobGas, toSkip)
 }
 
-func (p *TxPool) PeekBest(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas uint64) (bool, error) {
+func (p *TxPool) PeekBest(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas, availableBlobGas uint64) (bool, error) {
 	set := mapset.NewThreadUnsafeSet[[32]byte]()
-	onTime, _, err := p.best(n, txs, tx, onTopOf, availableGas, set)
+	onTime, _, err := p.best(n, txs, tx, onTopOf, availableGas, availableBlobGas, set)
 	return onTime, err
 }
 
@@ -639,6 +645,11 @@ func (p *TxPool) validateTx(txn *types.TxSlot, isLocal bool, stateCache kvcache.
 		if txn.DataLen > fixedgas.MaxInitCodeSize {
 			return InitCodeTooLarge
 		}
+	}
+
+	isLondon := p.isLondon()
+	if !isLondon && txn.Type == 0x2 {
+		return UnsupportedTx
 	}
 
 	// Drop non-local transactions under our own minimal accepted gas price or tip
@@ -715,6 +726,19 @@ func (p *TxPool) isShanghai() bool {
 		p.isPostShanghai.Swap(true)
 	}
 	return is
+}
+
+func (p *TxPool) isLondon() bool {
+	set := p.isPostLondon.Load()
+	if set {
+		return true
+	}
+	lbsBig := big.NewInt(0).SetUint64(p.lastSeenBlock.Load())
+	if p.londonBlock.Cmp(lbsBig) <= 0 {
+		p.isPostLondon.Swap(true)
+		return true
+	}
+	return false
 }
 
 func (p *TxPool) ValidateSerializedTxn(serializedTxn []byte) error {
@@ -1494,7 +1518,7 @@ func (p *TxPool) fromDB(ctx context.Context, tx kv.Tx, coreTx kv.Tx) error {
 		addr, txRlp := *(*[20]byte)(v[:20]), v[20:]
 		txn := &types.TxSlot{}
 
-		_, err = parseCtx.ParseTransaction(txRlp, 0, txn, nil, false /* hasEnvelope */, nil)
+		_, err = parseCtx.ParseTransaction(txRlp, 0, txn, nil, false /* hasEnvelope */, false, nil)
 		if err != nil {
 			err = fmt.Errorf("err: %w, rlp: %x", err, txRlp)
 			log.Warn("[txpool] fromDB: parseTransaction", "err", err)
@@ -1864,6 +1888,12 @@ func (b *BySenderAndNonce) nonce(senderID uint64) (nonce uint64, ok bool) {
 	s.Tx.Nonce = math.MaxUint64
 
 	b.tree.DescendLessOrEqual(s, func(mt *metaTx) bool {
+		if mt.currentSubPool != PendingSubPool {
+			// we only want to include transactions that are in the pending pool.  TXs in the queued pool
+			// artificially increase the "pending" call which can cause transactions to just stack up
+			// when libraries use eth_getTransactionCount "pending" for the next tx nonce - a common thing
+			return true
+		}
 		if mt.Tx.SenderID == senderID {
 			nonce = mt.Tx.Nonce
 			ok = true

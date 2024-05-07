@@ -3,6 +3,7 @@ package hermez_db
 import (
 	"encoding/binary"
 	"fmt"
+
 	"github.com/ledgerwatch/erigon-lib/common"
 )
 

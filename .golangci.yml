@@ -1,5 +1,9 @@
 run:
   deadline: 10m
+  build-tags:
+    - nosqlite
+    - noboltdb
+    - integration
 
 linters:
   presets:
@@ -8,6 +12,7 @@ linters:
     - unused
     - performance
   disable:
+    - gosec # enable it after 1-2 weeks. it failing CI withoutt enough info to fix: https://github.com/ledgerwatch/erigon/actions/runs/5928644129/job/16074701625
     - exhaustive
     - musttag
     - contextcheck
@@ -20,7 +25,10 @@ linters:
     - errorlint #TODO: enable me
     - errchkjson #TODO: enable me
     - unused #TODO: enable me
+    - testifylint #TODO: enable me
+    - perfsprint #TODO: enable me
     - gocheckcompilerdirectives
+    - protogetter
   enable:
     - unconvert
     #    - predeclared #TODO: enable me
@@ -119,6 +127,7 @@ issues:
         - unused
         - deadcode
         - gocritic
+        - perfsprint
     - path: hack\.go
       linters:
         - gosec

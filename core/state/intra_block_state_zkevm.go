@@ -5,8 +5,8 @@ import (
 
 	"github.com/holiman/uint256"
 	"github.com/iden3/go-iden3-crypto/keccak256"
+	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
-	"github.com/ledgerwatch/erigon/chain"
 	"github.com/ledgerwatch/erigon/common"
 	"github.com/ledgerwatch/erigon/core/types"
 	dstypes "github.com/ledgerwatch/erigon/zk/datastream/types"
@@ -20,13 +20,14 @@ var (
 	ADDRESS_SCALABLE_L2          = libcommon.HexToAddress("0x000000000000000000000000000000005ca1ab1e")
 	GER_MANAGER_ADDRESS          = libcommon.HexToAddress("0xa40D5f56745a118D0906a34E69aeC8C0Db1cB8fA")
 	GLOBAL_EXIT_ROOT_STORAGE_POS = libcommon.HexToHash("0x0")
+	GLOBAL_EXIT_ROOT_POS_1       = libcommon.HexToHash("0x1")
 )
 
 type ReadOnlyHermezDb interface {
 	GetEffectiveGasPricePercentage(txHash libcommon.Hash) (uint8, error)
 	GetStateRoot(l2BlockNo uint64) (libcommon.Hash, error)
 	GetBatchNoByL2Block(l2BlockNo uint64) (uint64, error)
-	GetBatchGlobalExitRoots(fromBatchNum, toBatchNum uint64) ([]*dstypes.GerUpdate, error)
+	GetBatchGlobalExitRoots(fromBatchNum, toBatchNum uint64) (*[]dstypes.GerUpdate, error)
 	GetBlockGlobalExitRoot(l2BlockNo uint64) (libcommon.Hash, error)
 	GetBlockL1BlockHash(l2BlockNo uint64) (libcommon.Hash, error)
 	GetGerForL1BlockHash(l1BlockHash libcommon.Hash) (libcommon.Hash, error)
@@ -69,7 +70,7 @@ func (sdb *IntraBlockState) PreExecuteStateSet(chainConfig *chain.Config, blockN
 	}
 }
 
-func (sdb *IntraBlockState) SyncerPreExecuteStateSet(chainConfig *chain.Config, blockNumber uint64, blockTimestamp uint64, prevBlockHash, blockGer, l1BlockHash *libcommon.Hash, gerUpdates *[]*dstypes.GerUpdate) {
+func (sdb *IntraBlockState) SyncerPreExecuteStateSet(chainConfig *chain.Config, blockNumber uint64, blockTimestamp uint64, prevBlockHash, blockGer, l1BlockHash *libcommon.Hash, gerUpdates *[]dstypes.GerUpdate) {
 	if !sdb.Exist(ADDRESS_SCALABLE_L2) {
 		// create account if not exists
 		sdb.CreateAccount(ADDRESS_SCALABLE_L2, true)
@@ -99,14 +100,12 @@ func (sdb *IntraBlockState) SyncerPreExecuteStateSet(chainConfig *chain.Config, 
 				GlobalExitRoot: *blockGer,
 				Timestamp:      blockTimestamp,
 			}
-			*gerUpdates = append(*gerUpdates, &blockGerUpdate)
+			*gerUpdates = append(*gerUpdates, blockGerUpdate)
 		}
 
 		for _, ger := range *gerUpdates {
 			//save ger
-			if ger != nil {
-				sdb.WriteGlobalExitRootTimestamp(ger.GlobalExitRoot, ger.Timestamp)
-			}
+			sdb.WriteGlobalExitRootTimestamp(ger.GlobalExitRoot, ger.Timestamp)
 		}
 
 	}

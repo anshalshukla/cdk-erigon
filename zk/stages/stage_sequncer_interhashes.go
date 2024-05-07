@@ -38,7 +38,6 @@ func SpawnSequencerInterhashesStage(
 	ctx context.Context,
 	cfg SequencerInterhashesCfg,
 	initialCycle bool,
-	quiet bool,
 ) error {
 	var err error
 	freshTx := tx == nil

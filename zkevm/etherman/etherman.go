@@ -12,15 +12,15 @@ import (
 
 	"github.com/holiman/uint256"
 	ethereum "github.com/ledgerwatch/erigon"
+	"github.com/ledgerwatch/erigon-lib/chain"
+	zkchainconfig "github.com/ledgerwatch/erigon-lib/chain"
 	"github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon/accounts/abi"
 	"github.com/ledgerwatch/erigon/accounts/abi/bind"
-	"github.com/ledgerwatch/erigon/chain"
 	"github.com/ledgerwatch/erigon/core/types"
 	"github.com/ledgerwatch/erigon/crypto"
 	"github.com/ledgerwatch/erigon/ethclient"
 	"github.com/ledgerwatch/erigon/params"
-	"github.com/ledgerwatch/erigon/zk/zkchainconfig"
 	"github.com/ledgerwatch/erigon/zkevm/etherman/smartcontracts/matic"
 	"github.com/ledgerwatch/erigon/zkevm/etherman/smartcontracts/polygonzkevm"
 	"github.com/ledgerwatch/erigon/zkevm/etherman/smartcontracts/polygonzkevmglobalexitroot"
@@ -161,12 +161,19 @@ func NewClient(cfg Config) (*Client, error) {
 	switch cfg.L1ChainID {
 	case params.MainnetChainConfig.ChainID.Uint64():
 		l1Conf = params.MainnetChainConfig
-		l2Conf = params.HermezMainnetChainConfig
+		l2Conf = params.ChainConfigByChainName(cfg.L2ChainName)
 	case params.SepoliaChainConfig.ChainID.Uint64():
 		l1Conf = params.SepoliaChainConfig
-		l2Conf = params.ChainConfigByChainName(zkchainconfig.GetChainName(cfg.L2ChainID))
+		l2Conf = params.ChainConfigByChainName(cfg.L2ChainName)
 	default:
-		panic(fmt.Sprintf("L1 chain ID %d not supported", cfg.L1ChainID))
+		l1Conf = params.ChainConfigByChainName(zkchainconfig.GetChainName(cfg.L1ChainID))
+		l2Conf = params.ChainConfigByChainName(cfg.L2ChainName)
+	}
+	if l1Conf == nil {
+		panic(fmt.Sprintf("Config not found for L1 chain ID %d", cfg.L1ChainID))
+	}
+	if l2Conf == nil {
+		panic(fmt.Sprintf("Config not found for L2 chain ID %d", cfg.L2ChainID))
 	}
 
 	return &Client{
@@ -549,7 +556,7 @@ func (etherMan *Client) forcedBatchEvent(ctx context.Context, vLog types.Log, bl
 		return fmt.Errorf("error: tx is still pending. TxHash: %s", tx.Hash().String())
 	}
 
-	signer := types.MakeSigner(etherMan.L2ChainConfig, 0)
+	signer := types.MakeSigner(etherMan.L2ChainConfig, 0, 0)
 
 	msg, err := tx.AsMessage(*signer, big.NewInt(0), etherMan.L2ChainConfig.Rules(0, 0))
 	if err != nil {
@@ -619,7 +626,7 @@ func (etherMan *Client) sequencedBatchesEvent(ctx context.Context, vLog types.Lo
 		return fmt.Errorf("error tx is still pending. TxHash: %s", tx.Hash().String())
 	}
 
-	signer := types.MakeSigner(etherMan.L1ChainConfig, 0)
+	signer := types.MakeSigner(etherMan.L1ChainConfig, 0, 0)
 	msg, err := tx.AsMessage(*signer, big.NewInt(0), params.MainnetChainConfig.Rules(0, 0))
 	if err != nil {
 		return err
@@ -745,7 +752,7 @@ func (etherMan *Client) forceSequencedBatchesEvent(ctx context.Context, vLog typ
 	} else if isPending {
 		return fmt.Errorf("error: tx is still pending. TxHash: %s", tx.Hash().String())
 	}
-	signer := types.MakeSigner(etherMan.L2ChainConfig, 0)
+	signer := types.MakeSigner(etherMan.L2ChainConfig, 0, 0)
 	msg, err := tx.AsMessage(*signer, big.NewInt(0), etherMan.L2ChainConfig.Rules(0, 0))
 	if err != nil {
 		return err

@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/c2h5oh/datasize"
+	mdbx2 "github.com/erigontech/mdbx-go/mdbx"
 	"github.com/holiman/uint256"
 	"github.com/ledgerwatch/erigon-lib/txpool/txpoolcfg"
 	"github.com/ledgerwatch/log/v3"
-	mdbx2 "github.com/torquem-ch/mdbx-go/mdbx"
 
 	"github.com/ledgerwatch/erigon-lib/chain"
 	"github.com/ledgerwatch/erigon-lib/direct"
@@ -107,7 +107,7 @@ func AllComponents(ctx context.Context, cfg txpoolcfg.Config, zkCfg *ethconfig.Z
 		Flags(func(f uint) uint { return f ^ mdbx2.Durable | mdbx2.SafeNoSync }).
 		GrowthStep(16 * datasize.MB).
 		SyncPeriod(30 * time.Second).
-		Open()
+		Open(ctx)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
@@ -124,7 +124,7 @@ func AllComponents(ctx context.Context, cfg txpoolcfg.Config, zkCfg *ethconfig.Z
 		shanghaiTime = cfg.OverrideShanghaiTime
 	}
 
-	txPool, err := txpool.New(newTxs, chainDB, cfg, zkCfg, cache, *chainID, shanghaiTime)
+	txPool, err := txpool.New(newTxs, chainDB, cfg, zkCfg, cache, *chainID, shanghaiTime, chainConfig.LondonBlock)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}

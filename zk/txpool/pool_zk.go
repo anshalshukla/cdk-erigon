@@ -144,7 +144,7 @@ func onSenderStateChange(senderID uint64, senderNonce uint64, senderBalance uint
 
 // zk: the implementation of best here is changed only to not take into account block gas limits as we don't care about
 // these in zk.  Instead we do a quick check on the transaction maximum gas in zk
-func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas uint64, toSkip mapset.Set[[32]byte]) (bool, int, error) {
+func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableGas, availableBlobGas uint64, toSkip mapset.Set[[32]byte]) (bool, int, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -154,6 +154,8 @@ func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableG
 	}
 
 	isShanghai := p.isShanghai()
+	isLondon := p.isLondon()
+	_ = isLondon
 	best := p.pending.best
 
 	txs.Resize(uint(cmp.Min(int(n), len(best.ms))))
@@ -172,6 +174,13 @@ func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableG
 			continue
 		}
 
+		if !isLondon && mt.Tx.Type == 0x2 {
+			// remove ldn txs when not in london
+			toRemove = append(toRemove, mt)
+			toSkip.Add(mt.Tx.IDHash)
+			continue
+		}
+
 		if mt.Tx.Gas >= transactionGasLimit {
 			// Skip transactions with very large gas limit, these shouldn't enter the pool at all
 			log.Debug("found a transaction in the pending pool with too high gas for tx - clear the tx pool")
@@ -185,6 +194,13 @@ func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableG
 			toRemove = append(toRemove, mt)
 			continue
 		}
+
+		// Skip transactions that require more blob gas than is available
+		blobCount := uint64(len(mt.Tx.BlobHashes))
+		if blobCount*fixedgas.BlobGasPerBlob > availableBlobGas {
+			continue
+		}
+		availableBlobGas -= blobCount * fixedgas.BlobGasPerBlob
 
 		// make sure we have enough gas in the caller to add this transaction.
 		// not an exact science using intrinsic gas but as close as we could hope for at
@@ -213,4 +229,8 @@ func (p *TxPool) best(n uint16, txs *types.TxsRlp, tx kv.Tx, onTopOf, availableG
 		}
 	}
 	return true, count, nil
+}
+
+func (p *TxPool) ForceUpdateLatestBlock(blockNumber uint64) {
+	p.lastSeenBlock.Store(blockNumber)
 }

@@ -1,14 +1,14 @@
 package db
 
 import (
+	"context"
 	"math/big"
 
 	"fmt"
 	"strings"
 
 	"github.com/ledgerwatch/erigon-lib/kv"
-	"github.com/ledgerwatch/erigon/ethdb"
-	"github.com/ledgerwatch/erigon/ethdb/olddb"
+	"github.com/ledgerwatch/erigon-lib/kv/membatch"
 	"github.com/ledgerwatch/erigon/smt/pkg/utils"
 	"github.com/ledgerwatch/log/v3"
 )
@@ -25,7 +25,7 @@ type SmtDbTx interface {
 }
 
 const TableSmt = "HermezSmt"
-const TableLastRoot = "HermezSmtLastRoot"
+const TableStats = "HermezSmtStats"
 const TableAccountValues = "HermezSmtAccountValues"
 const TableMetadata = "HermezSmtMetadata"
 const TableHashKey = "HermezSmtHashKey"
@@ -41,7 +41,7 @@ func CreateEriDbBuckets(tx kv.RwTx) error {
 		return err
 	}
 
-	err = tx.CreateBucket(TableLastRoot)
+	err = tx.CreateBucket(TableStats)
 	if err != nil {
 		return err
 	}
@@ -72,8 +72,8 @@ func NewEriDb(tx kv.RwTx) *EriDb {
 }
 
 func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
-	var batch ethdb.DbWithPendingMutations
-	batch = olddb.NewHashBatch(m.kvTx, quitCh, "./tempdb")
+	// var batch kv.PendingMutations
+	batch := membatch.NewHashBatch(m.kvTx, quitCh, "./tempdb", log.New())
 	defer func() {
 		batch.Rollback()
 	}()
@@ -81,12 +81,16 @@ func (m *EriDb) OpenBatch(quitCh <-chan struct{}) {
 }
 
 func (m *EriDb) CommitBatch() error {
-	if _, ok := m.tx.(ethdb.DbWithPendingMutations); !ok {
+	batch, ok := m.tx.(kv.PendingMutations)
+	if !ok {
+
 		return nil // don't roll back a kvRw tx
 	}
-	err := m.tx.Commit()
+	// err := m.tx.Commit()
+	err := batch.Flush(context.Background(), m.kvTx)
 	if err != nil {
-		m.tx.Rollback()
+		// m.tx.Rollback()
+		batch.Close()
 		return err
 	}
 	m.tx = m.kvTx
@@ -94,7 +98,7 @@ func (m *EriDb) CommitBatch() error {
 }
 
 func (m *EriDb) RollbackBatch() {
-	if _, ok := m.tx.(ethdb.DbWithPendingMutations); !ok {
+	if _, ok := m.tx.(kv.PendingMutations); !ok {
 		return // don't roll back a kvRw tx
 	}
 	m.tx.Rollback()
@@ -102,7 +106,7 @@ func (m *EriDb) RollbackBatch() {
 }
 
 func (m *EriDb) GetLastRoot() (*big.Int, error) {
-	data, err := m.tx.GetOne(TableLastRoot, []byte("lastRoot"))
+	data, err := m.tx.GetOne(TableStats, []byte("lastRoot"))
 	if err != nil {
 		return big.NewInt(0), err
 	}
@@ -116,7 +120,24 @@ func (m *EriDb) GetLastRoot() (*big.Int, error) {
 
 func (m *EriDb) SetLastRoot(r *big.Int) error {
 	v := utils.ConvertBigIntToHex(r)
-	return m.tx.Put(TableLastRoot, []byte("lastRoot"), []byte(v))
+	return m.tx.Put(TableStats, []byte("lastRoot"), []byte(v))
+}
+
+func (m *EriDb) GetDepth() (uint8, error) {
+	data, err := m.tx.GetOne(TableStats, []byte("depth"))
+	if err != nil {
+		return 0, err
+	}
+
+	if data == nil {
+		return 0, nil
+	}
+
+	return data[0], nil
+}
+
+func (m *EriDb) SetDepth(depth uint8) error {
+	return m.tx.Put(TableStats, []byte("lastRoot"), []byte{depth})
 }
 
 func (m *EriDb) Get(key utils.NodeKey) (utils.NodeValue12, error) {

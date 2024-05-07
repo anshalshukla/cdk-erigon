@@ -86,7 +86,7 @@ func CompareAccountRange(logger log.Logger, erigonURL, gethURL, tmpDataDir, geth
 				if innerErr != nil {
 					return innerErr
 				}
-				err = db.Put(kv.AccountsHistory, addr.Bytes(), b)
+				err = db.Put(kv.E2AccountsHistory, addr.Bytes(), b)
 				if err != nil {
 					return err
 				}
@@ -122,18 +122,20 @@ func CompareAccountRange(logger log.Logger, erigonURL, gethURL, tmpDataDir, geth
 		log.Error(err.Error())
 		return
 	}
+	defer tgTx.Rollback()
 	gethTx, err := gethKV.BeginRo(context.Background())
 	if err != nil {
 		log.Error(err.Error())
 		return
 	}
-	tgCursor, err := tgTx.Cursor(kv.AccountsHistory)
+	defer gethTx.Rollback()
+	tgCursor, err := tgTx.Cursor(kv.E2AccountsHistory)
 	if err != nil {
 		log.Error(err.Error())
 		return
 	}
 	defer tgCursor.Close()
-	gethCursor, err := gethTx.Cursor(kv.AccountsHistory)
+	gethCursor, err := gethTx.Cursor(kv.E2AccountsHistory)
 	if err != nil {
 		log.Error(err.Error())
 		return

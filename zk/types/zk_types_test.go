@@ -1,9 +1,10 @@
 package types
 
 import (
+	"testing"
+
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func Test_L1InfoTreeMarshallUnmarshall(t *testing.T) {

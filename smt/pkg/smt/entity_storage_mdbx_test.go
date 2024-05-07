@@ -203,7 +203,7 @@ func runGenesisTestMdbx(tb testing.TB, filename string) {
 		tb.Fatal("Failed to parse json: ", err)
 	}
 
-	dbi, err := mdbx.NewTemporaryMdbx()
+	dbi, err := mdbx.NewTemporaryMdbx(context.Background(), tb.TempDir())
 	if err != nil {
 		tb.Fatal("Failed to open db: ", err)
 	}
@@ -308,7 +308,7 @@ func runTestVectorsMdbx(t *testing.T, filename string) {
 }
 
 func getTempMdbx() (*db2.EriDb, kv.RwDB, error) {
-	dbi, err := mdbx.NewTemporaryMdbx()
+	dbi, err := mdbx.NewTemporaryMdbx(context.Background(), os.TempDir())
 	if err != nil {
 		return nil, nil, err
 	}

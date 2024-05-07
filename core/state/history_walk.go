@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/ledgerwatch/erigon-lib/kv/dbutils"
+
 	"github.com/RoaringBitmap/roaring/roaring64"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/length"
@@ -12,7 +14,6 @@ import (
 	"github.com/ledgerwatch/erigon-lib/kv/bitmapdb"
 
 	"github.com/ledgerwatch/erigon/common"
-	"github.com/ledgerwatch/erigon/common/dbutils"
 	"github.com/ledgerwatch/erigon/ethdb"
 )
 
@@ -43,7 +44,7 @@ func WalkAsOfStorage(tx kv.Tx, address libcommon.Address, incarnation uint64, st
 	)
 
 	//for historic data
-	shCursor, err := tx.Cursor(kv.StorageHistory)
+	shCursor, err := tx.Cursor(kv.E2StorageHistory)
 	if err != nil {
 		return err
 	}
@@ -150,7 +151,7 @@ func WalkAsOfAccounts(tx kv.Tx, startAddress libcommon.Address, timestamp uint64
 		return err
 	}
 	defer mainCursor.Close()
-	ahCursor, err := tx.Cursor(kv.AccountsHistory)
+	ahCursor, err := tx.Cursor(kv.E2AccountsHistory)
 	if err != nil {
 		return err
 	}

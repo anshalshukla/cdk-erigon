@@ -22,7 +22,7 @@ import (
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/kv"
 
-	"github.com/ledgerwatch/erigon/common/dbutils"
+	"github.com/ledgerwatch/erigon-lib/kv/dbutils"
 )
 
 // DeleteHeader - dangerous, use DeleteAncientBlocks/TruncateBlocks methods

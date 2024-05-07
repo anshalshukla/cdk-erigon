@@ -6,12 +6,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ledgerwatch/erigon-lib/chain"
 	libcommon "github.com/ledgerwatch/erigon-lib/common"
 	"github.com/ledgerwatch/erigon-lib/common/datadir"
 	"github.com/ledgerwatch/erigon-lib/kv"
-	"github.com/ledgerwatch/erigon-lib/kv/memdb"
 	libstate "github.com/ledgerwatch/erigon-lib/state"
-	"github.com/ledgerwatch/erigon/chain"
 	"github.com/ledgerwatch/erigon/consensus"
 	"github.com/ledgerwatch/erigon/core"
 	"github.com/ledgerwatch/erigon/core/rawdb"
@@ -30,10 +29,12 @@ import (
 	zkStages "github.com/ledgerwatch/erigon/zk/stages"
 	zkUtils "github.com/ledgerwatch/erigon/zk/utils"
 	"github.com/ledgerwatch/log/v3"
+
+	"github.com/ledgerwatch/erigon-lib/kv/membatchwithdb"
 )
 
 var (
-	maxGetProofRewindBlockCount uint64 = 1_000
+	maxGetProofRewindBlockCount uint64 = 10_000
 
 	ErrEndBeforeStart = errors.New("end block must be higher than start block")
 )
@@ -66,7 +67,7 @@ func NewGenerator(
 	}
 }
 
-func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug bool) ([]byte, error) {
+func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, endBlock uint64, debug, witnessFull bool) ([]byte, error) {
 	if startBlock > endBlock {
 		return nil, ErrEndBeforeStart
 	}
@@ -85,7 +86,7 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 		return nil, fmt.Errorf("block number is in the future latest=%d requested=%d", latestBlock, endBlock)
 	}
 
-	batch := memdb.NewMemoryBatch(tx, g.dirs.Tmp)
+	batch := membatchwithdb.NewMemoryBatch(tx, g.dirs.Tmp, log.New())
 	defer batch.Rollback()
 	if err = populateDbTables(batch); err != nil {
 		return nil, err
@@ -108,8 +109,7 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 		stageState := &stagedsync.StageState{BlockNumber: latestBlock}
 
 		hashStageCfg := stagedsync.StageHashStateCfg(nil, g.dirs, g.historyV3, g.agg)
-		hashStageCfg.SetQuiet(true)
-		if err := stagedsync.UnwindHashStateStage(unwindState, stageState, batch, hashStageCfg, ctx); err != nil {
+		if err := stagedsync.UnwindHashStateStage(unwindState, stageState, batch, hashStageCfg, ctx, log.New()); err != nil {
 			return nil, err
 		}
 
@@ -143,10 +143,16 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 
 	for blockNum := startBlock; blockNum <= endBlock; blockNum++ {
 		block, err := rawdb.ReadBlockByNumber(tx, blockNum)
-
 		if err != nil {
 			return nil, err
 		}
+
+		var prevBlockHash libcommon.Hash
+		prevBlock, err := rawdb.ReadBlockByNumber(tx, blockNum-1)
+		if err != nil {
+			return nil, err
+		}
+		prevBlockHash = prevBlock.Hash()
 
 		reader := state.NewPlainState(tx, blockNum, systemcontracts.SystemContractCodeLookup[g.chainCfg.ChainName])
 
@@ -171,10 +177,10 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 			return nil, err
 		}
 
-		var globalExitRoots []*dstypes.GerUpdate
+		var globalExitRoots []dstypes.GerUpdate
 
 		if gersInBetween != nil {
-			globalExitRoots = append(globalExitRoots, gersInBetween...)
+			globalExitRoots = append(globalExitRoots, *gersInBetween...)
 		}
 
 		blockGer, err := hermezDb.GetBlockGlobalExitRoot(blockNum)
@@ -188,7 +194,7 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 				GlobalExitRoot: blockGer,
 				Timestamp:      block.Header().Time,
 			}
-			globalExitRoots = append(globalExitRoots, &blockGerUpdate)
+			globalExitRoots = append(globalExitRoots, blockGerUpdate)
 		}
 
 		for _, ger := range globalExitRoots {
@@ -208,23 +214,25 @@ func (g *Generator) GenerateWitness(tx kv.Tx, ctx context.Context, startBlock, e
 
 		getHashFn := core.GetHashFn(block.Header(), getHeader)
 
-		chainReader := stagedsync.NewChainReaderImpl(g.chainCfg, tx, nil)
+		chainReader := stagedsync.NewChainReaderImpl(g.chainCfg, tx, nil, log.New())
 
-		_, err = core.ExecuteBlockEphemerally(g.chainCfg, &vmConfig, getHashFn, engine, block, tds, trieStateWriter, chainReader, nil, nil, hermezDb)
+		_, err = core.ExecuteBlockEphemerallyZk(g.chainCfg, &vmConfig, getHashFn, engine, &prevBlockHash, block, tds, trieStateWriter, chainReader, nil, nil, hermezDb)
 
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	// todo [zkevm] we need to use this retain list rather than using the always true retain decider
-	rl, err := tds.ResolveSMTRetainList()
-	if err != nil {
-		return nil, err
-	}
+	var rl trie.RetainDecider
+	// if full is true, we will send all the nodes to the witness
+	rl = &trie.AlwaysTrueRetainDecider{}
 
-	// if you ever need to send the full witness then you can use this always true trimmer and the whole state will be sent
-	//rl := &trie.AlwaysTrueRetainDecider{}
+	if !witnessFull {
+		rl, err = tds.ResolveSMTRetainList()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	eridb := db2.NewEriDb(batch)
 	smtTrie := smt.NewSMT(eridb)
@@ -246,18 +254,22 @@ func getWitnessBytes(witness *trie.Witness, debug bool) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func populateDbTables(batch *memdb.MemoryMutation) error {
+func populateDbTables(batch *membatchwithdb.MemoryMutation) error {
 	tables := []string{
 		db2.TableSmt,
 		db2.TableAccountValues,
 		db2.TableMetadata,
 		db2.TableHashKey,
-		db2.TableLastRoot,
+		db2.TableStats,
 		hermez_db.TX_PRICE_PERCENTAGE,
 		hermez_db.BLOCKBATCHES,
 		hermez_db.BLOCK_GLOBAL_EXIT_ROOTS,
 		hermez_db.GLOBAL_EXIT_ROOTS_BATCHES,
 		hermez_db.STATE_ROOTS,
+		hermez_db.BATCH_WITNESSES,
+		hermez_db.L1_BLOCK_HASHES,
+		hermez_db.BLOCK_L1_BLOCK_HASHES,
+		hermez_db.INTERMEDIATE_TX_STATEROOTS,
 	}
 
 	for _, t := range tables {
